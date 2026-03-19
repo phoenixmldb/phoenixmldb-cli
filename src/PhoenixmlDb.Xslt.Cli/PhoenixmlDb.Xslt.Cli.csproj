@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PhoenixmlDb.Xslt.Cli</RootNamespace>
+    <AssemblyName>xslt</AssemblyName>
+    <Description>Command-line XSLT 3.0/4.0 processor for transforming XML documents</Description>
+    <Authors>endpointsystems</Authors>
+    <!-- dotnet tool support -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>xslt</ToolCommandName>
+    <PackageId>PhoenixmlDb.Xslt.Cli</PackageId>
+    <NoWarn>$(NoWarn);CA1303</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhoenixmlDb.Core\PhoenixmlDb.Core.csproj" />
+    <ProjectReference Include="..\PhoenixmlDb.Xdm\PhoenixmlDb.Xdm.csproj" />
+    <ProjectReference Include="..\PhoenixmlDb.XQuery\PhoenixmlDb.XQuery.csproj" />
+    <ProjectReference Include="..\PhoenixmlDb.Xslt\PhoenixmlDb.Xslt.csproj" />
+  </ItemGroup>
+
+</Project>
