@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PhoenixmlDb.XQuery.Cli</RootNamespace>
+    <AssemblyName>xquery</AssemblyName>
+    <Description>Command-line XQuery processor for XML files, directories, and URLs</Description>
+    <Authors>endpointsystems</Authors>
+    <!-- dotnet tool support -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>xquery</ToolCommandName>
+    <PackageId>PhoenixmlDb.XQuery.Cli</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PhoenixmlDb.Core\PhoenixmlDb.Core.csproj" />
+    <ProjectReference Include="..\PhoenixmlDb.Xdm\PhoenixmlDb.Xdm.csproj" />
+    <ProjectReference Include="..\PhoenixmlDb.XQuery\PhoenixmlDb.XQuery.csproj" />
+  </ItemGroup>
+
+</Project>
