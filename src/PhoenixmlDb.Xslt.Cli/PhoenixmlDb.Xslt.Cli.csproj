@@ -14,10 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PhoenixmlDb.Core\PhoenixmlDb.Core.csproj" />
-    <ProjectReference Include="..\PhoenixmlDb.Xdm\PhoenixmlDb.Xdm.csproj" />
-    <ProjectReference Include="..\PhoenixmlDb.XQuery\PhoenixmlDb.XQuery.csproj" />
-    <ProjectReference Include="..\PhoenixmlDb.Xslt\PhoenixmlDb.Xslt.csproj" />
+    <PackageReference Include="PhoenixmlDb.Xslt" />
   </ItemGroup>
 
 </Project>

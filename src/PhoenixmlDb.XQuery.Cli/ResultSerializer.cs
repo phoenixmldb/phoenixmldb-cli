@@ -8,7 +8,7 @@ namespace PhoenixmlDb.XQuery.Cli;
 /// <summary>
 /// Serializes XQuery results to text output.
 /// </summary>
-public sealed class ResultSerializer
+internal sealed class ResultSerializer
 {
     private readonly DocumentEnvironment _env;
     private readonly TextWriter _output;
@@ -134,7 +134,7 @@ public sealed class ResultSerializer
                 break;
 
             case XdmElement elem:
-                var ns = _env.ResolveNamespaceUri(elem.Namespace) ?? string.Empty;
+                var ns = _env.ResolveNamespaceUri(elem.Namespace)?.ToString() ?? string.Empty;
                 if (!string.IsNullOrEmpty(elem.Prefix))
                     writer.WriteStartElement(elem.Prefix, elem.LocalName, ns);
                 else if (!string.IsNullOrEmpty(ns))
@@ -145,7 +145,7 @@ public sealed class ResultSerializer
                 // Write namespace declarations
                 foreach (var nsDecl in elem.NamespaceDeclarations)
                 {
-                    var declUri = _env.ResolveNamespaceUri(nsDecl.Namespace) ?? string.Empty;
+                    var declUri = _env.ResolveNamespaceUri(nsDecl.Namespace)?.ToString() ?? string.Empty;
                     if (string.IsNullOrEmpty(nsDecl.Prefix))
                         writer.WriteAttributeString("xmlns", declUri);
                     else
@@ -157,7 +157,7 @@ public sealed class ResultSerializer
                 {
                     if (_env.GetNode(attrId) is XdmAttribute attr)
                     {
-                        var attrNs = _env.ResolveNamespaceUri(attr.Namespace) ?? string.Empty;
+                        var attrNs = _env.ResolveNamespaceUri(attr.Namespace)?.ToString() ?? string.Empty;
                         if (!string.IsNullOrEmpty(attr.Prefix))
                             writer.WriteAttributeString(attr.Prefix, attr.LocalName, attrNs, attr.Value);
                         else if (!string.IsNullOrEmpty(attrNs))
@@ -195,17 +195,17 @@ public sealed class ResultSerializer
     private static string EscapeXmlAttribute(string value)
     {
         return value
-            .Replace("&", "&amp;")
-            .Replace("\"", "&quot;")
-            .Replace("<", "&lt;")
-            .Replace(">", "&gt;");
+            .Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("\"", "&quot;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal);
     }
 }
 
 /// <summary>
 /// Output serialization method.
 /// </summary>
-public enum OutputMethod
+internal enum OutputMethod
 {
     /// <summary>
     /// Automatically choose XML for nodes, text for atomic values.

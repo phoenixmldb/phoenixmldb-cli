@@ -123,7 +123,7 @@ internal sealed class DocumentEnvironment : INodeProvider, IDocumentResolver
     public Uri? ResolveNamespaceUri(NamespaceId id)
     {
         if (id == NamespaceId.None)
-            return new Uri(string.Empty);
+            return null;
 
         foreach (var (uri, nsId) in _namespaces)
         {
@@ -212,11 +212,18 @@ internal sealed class DocumentEnvironment : INodeProvider, IDocumentResolver
     public IReadOnlyList<XdmDocument> LoadDirectory(string directoryPath)
     {
         var docs = new List<XdmDocument>();
-        var xmlFiles = Directory.GetFiles(directoryPath, "*.xml", SearchOption.TopDirectoryOnly);
+        var xmlFiles = Directory.GetFiles(directoryPath, "*.xml", SearchOption.AllDirectories);
 
         foreach (var file in xmlFiles.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
-            docs.Add(LoadFile(file));
+            try
+            {
+                docs.Add(LoadFile(file));
+            }
+            catch (System.Xml.XmlException)
+            {
+                // Skip malformed XML files silently in directory scan
+            }
         }
 
         return docs;

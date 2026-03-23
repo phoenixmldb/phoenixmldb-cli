@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using PhoenixmlDb.Xslt;
 
 var options = CliOptions.Parse(args);
@@ -16,6 +17,8 @@ if (options.ShowHelp || options.Stylesheet == null)
 
 try
 {
+    var totalSw = Stopwatch.StartNew();
+
     // Load the stylesheet
     var stylesheetPath = Path.GetFullPath(options.Stylesheet);
     if (!File.Exists(stylesheetPath))
@@ -24,11 +27,48 @@ try
         return 1;
     }
 
+    var readSw = Stopwatch.StartNew();
     var stylesheetXml = await File.ReadAllTextAsync(stylesheetPath).ConfigureAwait(true);
     var stylesheetUri = new Uri(stylesheetPath);
+    readSw.Stop();
 
+    var compileSw = Stopwatch.StartNew();
     var transformer = new XsltTransformer();
     await transformer.LoadStylesheetAsync(stylesheetXml, stylesheetUri).ConfigureAwait(true);
+    compileSw.Stop();
+
+    if (options.Timing)
+    {
+        await Console.Error.WriteLineAsync(
+            $"  read:    {readSw.Elapsed.TotalMilliseconds,8:F1} ms  ({stylesheetXml.Length:N0} chars)")
+            .ConfigureAwait(true);
+        await Console.Error.WriteLineAsync(
+            $"  compile: {compileSw.Elapsed.TotalMilliseconds,8:F1} ms")
+            .ConfigureAwait(true);
+    }
+
+    if (options.DryRun)
+    {
+        if (options.Timing)
+        {
+            totalSw.Stop();
+            await Console.Error.WriteLineAsync(
+                $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
+                .ConfigureAwait(true);
+        }
+        await Console.Error.WriteLineAsync("Stylesheet compiled successfully.").ConfigureAwait(true);
+        return 0;
+    }
+
+    // Set up trace listener
+    if (options.Trace)
+    {
+        transformer.TraceListener = (depth, eventType, details) =>
+        {
+            var indent = new string(' ', depth * 2);
+            Console.Error.WriteLine($"  {indent}[{eventType}] {details}");
+        };
+    }
 
     // Set parameters
     foreach (var (name, value) in options.Parameters)
@@ -54,6 +94,7 @@ try
     string? inputXml = null;
     if (options.SourceFile != null)
     {
+        var sourceSw = Stopwatch.StartNew();
         var sourcePath = Path.GetFullPath(options.SourceFile);
         if (!File.Exists(sourcePath))
         {
@@ -63,6 +104,14 @@ try
 
         inputXml = await File.ReadAllTextAsync(sourcePath).ConfigureAwait(true);
         transformer.SetSourceDocumentUri(new Uri(sourcePath));
+        sourceSw.Stop();
+
+        if (options.Timing)
+        {
+            await Console.Error.WriteLineAsync(
+                $"  source:  {sourceSw.Elapsed.TotalMilliseconds,8:F1} ms  ({inputXml.Length:N0} chars)")
+                .ConfigureAwait(true);
+        }
     }
     else if (Console.IsInputRedirected)
     {
@@ -74,7 +123,16 @@ try
     }
 
     // Run the transformation
+    var transformSw = Stopwatch.StartNew();
     var result = await transformer.TransformAsync(inputXml).ConfigureAwait(true);
+    transformSw.Stop();
+
+    if (options.Timing)
+    {
+        await Console.Error.WriteLineAsync(
+            $"  transform: {transformSw.Elapsed.TotalMilliseconds,6:F1} ms  ({result.Length:N0} chars output)")
+            .ConfigureAwait(true);
+    }
 
     // Write primary output
     if (options.OutputFile != null)
@@ -110,6 +168,21 @@ try
             if (options.Verbose)
                 await Console.Error.WriteLineAsync($"  wrote: {secondaryPath}").ConfigureAwait(true);
         }
+
+        if (options.Timing)
+        {
+            await Console.Error.WriteLineAsync(
+                $"  secondary: {transformer.SecondaryResultDocuments.Count} document(s)")
+                .ConfigureAwait(true);
+        }
+    }
+
+    if (options.Timing)
+    {
+        totalSw.Stop();
+        await Console.Error.WriteLineAsync(
+            $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
+            .ConfigureAwait(true);
     }
 
     return 0;
@@ -176,6 +249,9 @@ static void PrintUsage()
                              Start with a named template instead of matching
           -im, --initial-mode <name>
                              Set the initial mode for template matching
+          --timing           Show parse/compile/transform timing breakdown
+          --trace            Log template matching, function calls, built-in rules
+          --dry-run          Parse and compile only, do not execute
           -v, --verbose      Show detailed error information
           -h, --help         Show this help message
           --version          Show version information
@@ -195,6 +271,8 @@ static void PrintUsage()
           xslt -o result.html report.xsl data.xml
           xslt -it main -p title="Hello" generate.xsl
           xslt --output-dir ./pages book-to-html.xsl book.xml
+          xslt --timing style.xsl large-input.xml
+          xslt --dry-run style.xsl
           curl http://example.com/data.xml | xslt transform.xsl
         """);
 }
@@ -211,6 +289,9 @@ file sealed class CliOptions
     public string? InitialTemplate { get; init; }
     public string? InitialMode { get; init; }
     public List<(string Name, string Value)> Parameters { get; init; } = [];
+    public bool Timing { get; init; }
+    public bool Trace { get; init; }
+    public bool DryRun { get; init; }
     public bool ShowHelp { get; init; }
     public bool ShowVersion { get; init; }
     public bool Verbose { get; init; }
@@ -224,6 +305,9 @@ file sealed class CliOptions
         string? initialTemplate = null;
         string? initialMode = null;
         var parameters = new List<(string Name, string Value)>();
+        var timing = false;
+        var trace = false;
+        var dryRun = false;
         var showHelp = false;
         var showVersion = false;
         var verbose = false;
@@ -274,6 +358,15 @@ file sealed class CliOptions
                 case "-im" or "--initial-mode":
                     expectingMode = true;
                     break;
+                case "--timing":
+                    timing = true;
+                    break;
+                case "--trace":
+                    trace = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
+                    break;
                 case "-v" or "--verbose":
                     verbose = true;
                     break;
@@ -306,6 +399,9 @@ file sealed class CliOptions
             InitialTemplate = initialTemplate,
             InitialMode = initialMode,
             Parameters = parameters,
+            Timing = timing,
+            Trace = trace,
+            DryRun = dryRun,
             ShowHelp = showHelp,
             ShowVersion = showVersion,
             Verbose = verbose

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using PhoenixmlDb.Core;
 using PhoenixmlDb.XQuery.Cli;
 using PhoenixmlDb.XQuery.Execution;
@@ -5,20 +7,22 @@ using PhoenixmlDb.Xdm.Nodes;
 
 var options = CliOptions.Parse(args);
 
+if (options.ShowVersion)
+{
+    Console.WriteLine("xquery 1.0.0-preview.1 (PhoenixmlDb XQuery/XPath 4.0)");
+    return 0;
+}
+
 if (options.ShowHelp || (options.Query == null && options.QueryFile == null))
 {
     PrintUsage();
     return options.ShowHelp ? 0 : 1;
 }
 
-if (options.ShowVersion)
-{
-    Console.WriteLine("xquery 1.0.0-preview.1 (PhoenixmlDb)");
-    return 0;
-}
-
 try
 {
+    var totalSw = Stopwatch.StartNew();
+
     // Resolve the query text
     string query;
     if (options.QueryFile != null)
@@ -36,6 +40,7 @@ try
     }
 
     // Set up the document environment
+    var loadSw = Stopwatch.StartNew();
     var env = new DocumentEnvironment();
     XdmDocument? contextDocument = null;
 
@@ -65,35 +70,121 @@ try
         }
     }
 
-    // Read from stdin if no sources given and stdin is piped
+    // Read from stdin if explicitly requested or if data is available on a pipe
     if (options.Sources.Count == 0 && options.ReadStdin)
     {
-        using var reader = new StreamReader(Console.OpenStandardInput());
-        var xml = await reader.ReadToEndAsync().ConfigureAwait(true);
-        if (!string.IsNullOrWhiteSpace(xml))
+        var stdin = Console.OpenStandardInput();
+        var buf = new byte[1];
+        // Peek first byte with timeout to detect if data is coming
+        var peekTask = Task.Run(() => stdin.Read(buf, 0, 1));
+        var timeoutMs = options.ExplicitStdin ? Timeout.Infinite : options.StdinTimeout;
+
+        if (await Task.WhenAny(peekTask, Task.Delay(timeoutMs)).ConfigureAwait(true) == peekTask
+            && await peekTask.ConfigureAwait(true) > 0)
         {
-            contextDocument = env.LoadFromString(xml, "stdin:");
+            // First byte received — read the rest without timeout
+            using var ms = new MemoryStream();
+            await ms.WriteAsync(buf).ConfigureAwait(true);
+            await stdin.CopyToAsync(ms).ConfigureAwait(true);
+            ms.Position = 0;
+            using var reader = new StreamReader(ms);
+            var xml = await reader.ReadToEndAsync().ConfigureAwait(true);
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                contextDocument = env.LoadFromString(xml, "stdin:");
+            }
         }
     }
+    loadSw.Stop();
 
     // Create and configure the query engine
     var engine = new QueryEngine(
         nodeProvider: env,
         documentResolver: env);
 
-    // Execute the query
-    var serializer = new ResultSerializer(env, Console.Out, options.OutputMethod);
-    var hasOutput = false;
+    // Compile the query
+    var compileSw = Stopwatch.StartNew();
+    var compilationResult = engine.Compile(query);
+    compileSw.Stop();
 
-    await foreach (var result in engine.ExecuteAsync(query))
+    if (!compilationResult.Success)
     {
-        serializer.Serialize(result);
-        hasOutput = true;
+        var errorMessages = string.Join("; ", compilationResult.Errors.Select(e => e.Message));
+        throw new XQueryRuntimeException("XPST0003", $"Compilation failed: {errorMessages}");
     }
 
-    if (hasOutput)
+    if (options.Timing)
+    {
+        if (options.Sources.Count > 0 || contextDocument != null)
+        {
+            await Console.Error.WriteLineAsync(
+                $"  load:    {loadSw.Elapsed.TotalMilliseconds,8:F1} ms  ({env.Documents.Count} document(s))")
+                .ConfigureAwait(true);
+        }
+        await Console.Error.WriteLineAsync(
+            $"  compile: {compileSw.Elapsed.TotalMilliseconds,8:F1} ms")
+            .ConfigureAwait(true);
+    }
+
+    // Show execution plan if requested
+    if (options.ShowPlan)
+    {
+        await Console.Error.WriteLineAsync("Execution Plan:").ConfigureAwait(true);
+        DumpPlan(compilationResult.ExecutionPlan!.Root, Console.Error, indent: 2);
+        await Console.Error.WriteLineAsync().ConfigureAwait(true);
+    }
+
+    if (options.DryRun)
+    {
+        if (options.Timing)
+        {
+            totalSw.Stop();
+            await Console.Error.WriteLineAsync(
+                $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
+                .ConfigureAwait(true);
+        }
+        await Console.Error.WriteLineAsync("Query compiled successfully.").ConfigureAwait(true);
+        return 0;
+    }
+
+    // Execute with context document if available
+    var serializer = new ResultSerializer(env, Console.Out, options.OutputMethod);
+
+    var execSw = Stopwatch.StartNew();
+    using var context = engine.CreateContext();
+    if (contextDocument != null)
+        context.PushContextItem(contextDocument);
+
+    var itemCount = 0;
+    await foreach (var result in compilationResult.ExecutionPlan!.ExecuteAsync(context))
+    {
+        // Adaptive serialization: separate items with newlines (XQuery Serialization §12)
+        if (itemCount > 0 && options.OutputMethod == OutputMethod.Adaptive)
+            Console.WriteLine();
+        else if (itemCount > 0 && options.OutputMethod == OutputMethod.Text)
+            Console.Write(' ');
+        serializer.Serialize(result);
+        itemCount++;
+    }
+
+    if (contextDocument != null)
+        context.PopContextItem();
+    execSw.Stop();
+
+    if (itemCount > 0)
     {
         serializer.WriteNewline();
+    }
+
+    if (options.Timing)
+    {
+        await Console.Error.WriteLineAsync(
+            $"  execute: {execSw.Elapsed.TotalMilliseconds,8:F1} ms")
+            .ConfigureAwait(true);
+        totalSw.Stop();
+        await Console.Error.WriteLineAsync(
+            $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
+            .ConfigureAwait(true);
     }
 
     return 0;
@@ -119,6 +210,84 @@ catch (Exception ex)
     throw;
 }
 
+static void DumpPlan(PhysicalOperator op, TextWriter writer, int indent)
+{
+    var prefix = new string(' ', indent);
+    var typeName = op.GetType().Name;
+
+    // Remove "Operator" suffix for readability
+    if (typeName.EndsWith("Operator", StringComparison.Ordinal))
+        typeName = typeName[..^8];
+    if (typeName.EndsWith("Node", StringComparison.Ordinal))
+        typeName = typeName[..^4];
+
+    // Collect key properties (non-operator, non-method descriptors)
+    var details = new List<string>();
+    foreach (var prop in op.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+    {
+        if (prop.Name is "EstimatedCost" or "EstimatedCardinality")
+            continue;
+        if (typeof(PhysicalOperator).IsAssignableFrom(prop.PropertyType))
+            continue;
+        if (typeof(IEnumerable<PhysicalOperator>).IsAssignableFrom(prop.PropertyType))
+            continue;
+
+        try
+        {
+            var val = prop.GetValue(op);
+            if (val == null) continue;
+
+            // Skip large/noisy values
+            if (val is System.Delegate) continue;
+            if (val is PhysicalOperator) continue;
+
+            var str = val switch
+            {
+                string s => $"\"{s}\"",
+                QName q => q.ToString(),
+                bool b => b.ToString().ToLowerInvariant(),
+                _ => val.ToString()
+            };
+
+            if (!string.IsNullOrEmpty(str) && str != val.GetType().FullName)
+                details.Add($"{prop.Name}={str}");
+        }
+        catch (TargetInvocationException)
+        {
+            // Skip properties that throw during reflection
+        }
+    }
+
+    var detailStr = details.Count > 0 ? $"  ({string.Join(", ", details)})" : "";
+    writer.WriteLine($"{prefix}{typeName}{detailStr}");
+
+    // Recurse into child operators
+    foreach (var prop in op.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+    {
+        if (typeof(PhysicalOperator).IsAssignableFrom(prop.PropertyType))
+        {
+            if (prop.GetValue(op) is PhysicalOperator child)
+            {
+                writer.WriteLine($"{prefix}  {prop.Name}:");
+                DumpPlan(child, writer, indent + 4);
+            }
+        }
+        else if (typeof(IEnumerable<PhysicalOperator>).IsAssignableFrom(prop.PropertyType))
+        {
+            if (prop.GetValue(op) is IEnumerable<PhysicalOperator> children)
+            {
+                var list = children.ToList();
+                if (list.Count > 0)
+                {
+                    writer.WriteLine($"{prefix}  {prop.Name}:");
+                    foreach (var child in list)
+                        DumpPlan(child, writer, indent + 4);
+                }
+            }
+        }
+    }
+}
+
 static void PrintUsage()
 {
     Console.Error.WriteLine("""
@@ -136,7 +305,11 @@ static void PrintUsage()
           -f, --file <path>  Read XQuery from a file instead of inline
           -o, --output <method>
                              Output method: adaptive (default), xml, text
-          --stdin            Read XML input from stdin (automatic when piped)
+          --stdin            Read XML input from stdin (waits indefinitely)
+          --timeout <ms>     Stdin auto-detection timeout in ms (default: 200)
+          --timing           Show parse/compile/execute timing breakdown
+          --plan             Show the execution plan before running
+          --dry-run          Parse and compile only, do not execute
           -v, --verbose      Show detailed error information
           -h, --help         Show this help message
           --version          Show version information
@@ -155,7 +328,9 @@ static void PrintUsage()
           xquery 'count(//item)' catalog.xml
           xquery -f transform.xq input.xml
           xquery 'collection()//product' ./data/
-          xquery 'doc("http://example.com/feed.xml")//entry'
+          xquery --plan 'for $x in 1 to 10 return $x * $x'
+          xquery --timing '//item' large-catalog.xml
+          xquery --dry-run -f complex-query.xq
           curl http://example.com/data.xml | xquery '//item/@name'
         """);
 }
@@ -170,6 +345,11 @@ file sealed class CliOptions
     public List<string> Sources { get; init; } = [];
     public OutputMethod OutputMethod { get; init; } = OutputMethod.Adaptive;
     public bool ReadStdin { get; init; }
+    public bool ExplicitStdin { get; init; }
+    public int StdinTimeout { get; init; } = 200;
+    public bool Timing { get; init; }
+    public bool ShowPlan { get; init; }
+    public bool DryRun { get; init; }
     public bool ShowHelp { get; init; }
     public bool ShowVersion { get; init; }
     public bool Verbose { get; init; }
@@ -181,11 +361,17 @@ file sealed class CliOptions
         var sources = new List<string>();
         var outputMethod = OutputMethod.Adaptive;
         var readStdin = false;
+        var explicitStdin = false;
+        var stdinTimeout = 200;
+        var timing = false;
+        var showPlan = false;
+        var dryRun = false;
         var showHelp = false;
         var showVersion = false;
         var verbose = false;
         var expectingFile = false;
         var expectingOutput = false;
+        var expectingTimeout = false;
 
         foreach (var arg in args)
         {
@@ -208,6 +394,14 @@ file sealed class CliOptions
                 continue;
             }
 
+            if (expectingTimeout)
+            {
+                if (int.TryParse(arg, out var ms))
+                    stdinTimeout = ms;
+                expectingTimeout = false;
+                continue;
+            }
+
             switch (arg)
             {
                 case "-h" or "--help":
@@ -224,6 +418,19 @@ file sealed class CliOptions
                     break;
                 case "--stdin":
                     readStdin = true;
+                    explicitStdin = true;
+                    break;
+                case "--timeout":
+                    expectingTimeout = true;
+                    break;
+                case "--timing":
+                    timing = true;
+                    break;
+                case "--plan":
+                    showPlan = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "-v" or "--verbose":
                     verbose = true;
@@ -254,6 +461,11 @@ file sealed class CliOptions
             Sources = sources,
             OutputMethod = outputMethod,
             ReadStdin = readStdin,
+            ExplicitStdin = explicitStdin,
+            StdinTimeout = stdinTimeout,
+            Timing = timing,
+            ShowPlan = showPlan,
+            DryRun = dryRun,
             ShowHelp = showHelp,
             ShowVersion = showVersion,
             Verbose = verbose

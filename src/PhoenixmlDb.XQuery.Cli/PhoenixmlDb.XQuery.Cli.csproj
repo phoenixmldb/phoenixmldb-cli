@@ -10,12 +10,12 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>xquery</ToolCommandName>
     <PackageId>PhoenixmlDb.XQuery.Cli</PackageId>
+    <!-- CLI tools: suppress localization, case normalization, and ConfigureAwait warnings -->
+    <NoWarn>$(NoWarn);CA1303;CA1308;CA2000;CA2007</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PhoenixmlDb.Core\PhoenixmlDb.Core.csproj" />
-    <ProjectReference Include="..\PhoenixmlDb.Xdm\PhoenixmlDb.Xdm.csproj" />
-    <ProjectReference Include="..\PhoenixmlDb.XQuery\PhoenixmlDb.XQuery.csproj" />
+    <PackageReference Include="PhoenixmlDb.XQuery" />
   </ItemGroup>
 
 </Project>
