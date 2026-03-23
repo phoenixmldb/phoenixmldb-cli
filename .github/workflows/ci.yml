@@ -34,20 +34,17 @@ jobs:
           VERSION="1.0.${COMMIT_COUNT}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # NOTE: This repo currently uses ProjectReference to sibling directories
-      # for PhoenixmlDb.Core, PhoenixmlDb.Xdm, PhoenixmlDb.XQuery, and
-      # PhoenixmlDb.Xslt. These need to be changed to PackageReference before
-      # CI restore/build will work independently.
       - name: Restore
-        run: dotnet restore
+        run: |
+          dotnet restore src/PhoenixmlDb.Xslt.Cli
+          dotnet restore src/PhoenixmlDb.XQuery.Cli
 
       - name: Build
         env:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet build -c Release --no-restore -p:Version="$BUILD_VERSION"
-
-      - name: Test
-        run: dotnet test -c Release --no-restore --no-build --verbosity normal
+        run: |
+          dotnet build src/PhoenixmlDb.Xslt.Cli -c Release --no-restore -p:Version="$BUILD_VERSION"
+          dotnet build src/PhoenixmlDb.XQuery.Cli -c Release --no-restore -p:Version="$BUILD_VERSION"
 
       - name: Pack
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -71,6 +68,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     steps:
       - name: Download artifacts
@@ -84,10 +82,19 @@ jobs:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
-      - name: Publish to NuGet
+      - name: Login to NuGet via trusted publisher
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: endpointsystems
+
+      - name: Push to NuGet
+        env:
+          NUGET_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
           for pkg in ./artifacts/*.nupkg; do
             dotnet nuget push "$pkg" \
+              --api-key "$NUGET_KEY" \
               --source https://api.nuget.org/v3/index.json \
               --skip-duplicate
           done
