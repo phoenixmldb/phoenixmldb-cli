@@ -5,7 +5,7 @@ var options = CliOptions.Parse(args);
 
 if (options.ShowVersion)
 {
-    Console.WriteLine("xslt 1.0.0-preview.1 (PhoenixmlDb XSLT 3.0/4.0)");
+    Console.WriteLine("xslt 1.1.0 (PhoenixmlDb XSLT 3.0/4.0)");
     return 0;
 }
 
@@ -102,15 +102,70 @@ try
             return 1;
         }
 
-        inputXml = await File.ReadAllTextAsync(sourcePath).ConfigureAwait(true);
         transformer.SetSourceDocumentUri(new Uri(sourcePath));
-        sourceSw.Stop();
 
-        if (options.Timing)
+        if (options.Stream)
         {
-            await Console.Error.WriteLineAsync(
-                $"  source:  {sourceSw.Elapsed.TotalMilliseconds,8:F1} ms  ({inputXml.Length:N0} chars)")
-                .ConfigureAwait(true);
+            sourceSw.Stop();
+            if (options.Timing)
+            {
+                await Console.Error.WriteLineAsync(
+                    $"  source:  {sourceSw.Elapsed.TotalMilliseconds,8:F1} ms  (streaming)")
+                    .ConfigureAwait(true);
+            }
+
+            if (options.OutputDir != null)
+            {
+                transformer.ResultDocumentHandler = href =>
+                {
+                    var path = Path.Combine(options.OutputDir, href);
+                    var dir = Path.GetDirectoryName(path);
+                    if (dir != null && !Directory.Exists(dir))
+                        Directory.CreateDirectory(dir);
+                    return new StreamWriter(File.Create(path));
+                };
+            }
+
+            var streamTransformSw = Stopwatch.StartNew();
+            if (options.OutputFile != null)
+            {
+                var outputPath = Path.GetFullPath(options.OutputFile);
+                var outputDir = Path.GetDirectoryName(outputPath);
+                if (outputDir != null && !Directory.Exists(outputDir))
+                    Directory.CreateDirectory(outputDir);
+                using var inputStream = File.OpenRead(sourcePath);
+                using var outputStream = File.Create(outputPath);
+                await transformer.TransformAsync(inputStream, outputStream).ConfigureAwait(true);
+            }
+            else
+            {
+                using var inputStream = File.OpenRead(sourcePath);
+                using var inputReader = new StreamReader(inputStream);
+                var streamResult = await transformer.TransformAsync(inputReader).ConfigureAwait(true);
+                Console.Write(streamResult);
+                if (streamResult.Length > 0 && streamResult[^1] != '\n')
+                    Console.WriteLine();
+            }
+            streamTransformSw.Stop();
+
+            if (options.Timing)
+            {
+                await Console.Error.WriteLineAsync(
+                    $"  transform: {streamTransformSw.Elapsed.TotalMilliseconds,6:F1} ms  (streaming)")
+                    .ConfigureAwait(true);
+            }
+        }
+        else
+        {
+            inputXml = await File.ReadAllTextAsync(sourcePath).ConfigureAwait(true);
+            sourceSw.Stop();
+
+            if (options.Timing)
+            {
+                await Console.Error.WriteLineAsync(
+                    $"  source:  {sourceSw.Elapsed.TotalMilliseconds,8:F1} ms  ({inputXml.Length:N0} chars)")
+                    .ConfigureAwait(true);
+            }
         }
     }
     else if (Console.IsInputRedirected)
@@ -122,36 +177,39 @@ try
             inputXml = null;
     }
 
-    // Run the transformation
-    var transformSw = Stopwatch.StartNew();
-    var result = await transformer.TransformAsync(inputXml).ConfigureAwait(true);
-    transformSw.Stop();
-
-    if (options.Timing)
+    // Run the transformation (non-streaming path)
+    if (!options.Stream || options.SourceFile == null)
     {
-        await Console.Error.WriteLineAsync(
-            $"  transform: {transformSw.Elapsed.TotalMilliseconds,6:F1} ms  ({result.Length:N0} chars output)")
-            .ConfigureAwait(true);
+        var transformSw = Stopwatch.StartNew();
+        var result = await transformer.TransformAsync(inputXml).ConfigureAwait(true);
+        transformSw.Stop();
+
+        if (options.Timing)
+        {
+            await Console.Error.WriteLineAsync(
+                $"  transform: {transformSw.Elapsed.TotalMilliseconds,6:F1} ms  ({result.Length:N0} chars output)")
+                .ConfigureAwait(true);
+        }
+
+        // Write primary output
+        if (options.OutputFile != null)
+        {
+            var outputPath = Path.GetFullPath(options.OutputFile);
+            var outputDir = Path.GetDirectoryName(outputPath);
+            if (outputDir != null && !Directory.Exists(outputDir))
+                Directory.CreateDirectory(outputDir);
+            await File.WriteAllTextAsync(outputPath, result).ConfigureAwait(true);
+        }
+        else
+        {
+            Console.Write(result);
+            if (result.Length > 0 && result[^1] != '\n')
+                Console.WriteLine();
+        }
     }
 
-    // Write primary output
-    if (options.OutputFile != null)
-    {
-        var outputPath = Path.GetFullPath(options.OutputFile);
-        var outputDir = Path.GetDirectoryName(outputPath);
-        if (outputDir != null && !Directory.Exists(outputDir))
-            Directory.CreateDirectory(outputDir);
-        await File.WriteAllTextAsync(outputPath, result).ConfigureAwait(true);
-    }
-    else
-    {
-        Console.Write(result);
-        if (result.Length > 0 && result[^1] != '\n')
-            Console.WriteLine();
-    }
-
-    // Write secondary result documents
-    if (transformer.SecondaryResultDocuments.Count > 0)
+    // Write secondary result documents (non-streaming path only)
+    if (!options.Stream && transformer.SecondaryResultDocuments.Count > 0)
     {
         var baseDir = options.OutputDir ?? (options.OutputFile != null
             ? Path.GetDirectoryName(Path.GetFullPath(options.OutputFile))
@@ -252,6 +310,7 @@ static void PrintUsage()
           --timing           Show parse/compile/transform timing breakdown
           --trace            Log template matching, function calls, built-in rules
           --dry-run          Parse and compile only, do not execute
+          --stream           Use streaming for large files (lower memory usage)
           -v, --verbose      Show detailed error information
           -h, --help         Show this help message
           --version          Show version information
@@ -292,6 +351,7 @@ file sealed class CliOptions
     public bool Timing { get; init; }
     public bool Trace { get; init; }
     public bool DryRun { get; init; }
+    public bool Stream { get; init; }
     public bool ShowHelp { get; init; }
     public bool ShowVersion { get; init; }
     public bool Verbose { get; init; }
@@ -308,6 +368,7 @@ file sealed class CliOptions
         var timing = false;
         var trace = false;
         var dryRun = false;
+        var stream = false;
         var showHelp = false;
         var showVersion = false;
         var verbose = false;
@@ -367,6 +428,9 @@ file sealed class CliOptions
                 case "--dry-run":
                     dryRun = true;
                     break;
+                case "--stream":
+                    stream = true;
+                    break;
                 case "-v" or "--verbose":
                     verbose = true;
                     break;
@@ -402,6 +466,7 @@ file sealed class CliOptions
             Timing = timing,
             Trace = trace,
             DryRun = dryRun,
+            Stream = stream,
             ShowHelp = showHelp,
             ShowVersion = showVersion,
             Verbose = verbose

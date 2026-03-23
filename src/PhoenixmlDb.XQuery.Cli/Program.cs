@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using PhoenixmlDb.Core;
 using PhoenixmlDb.XQuery.Cli;
 using PhoenixmlDb.XQuery.Execution;
@@ -9,7 +10,7 @@ var options = CliOptions.Parse(args);
 
 if (options.ShowVersion)
 {
-    Console.WriteLine("xquery 1.0.0-preview.1 (PhoenixmlDb XQuery/XPath 4.0)");
+    Console.WriteLine("xquery 1.1.0 (PhoenixmlDb XQuery/XPath 4.0)");
     return 0;
 }
 
@@ -37,6 +38,29 @@ try
     else
     {
         query = options.Query!;
+    }
+
+    // If no explicit -o flag was given, check the query prolog for declare option output:method
+    var outputMethod = options.OutputMethod;
+    if (!options.OutputMethodExplicit)
+    {
+        const string optionPattern = @"declare\s+option\s+(?:output:(\w[\w-]*)|Q\{[^}]*\}(\w[\w-]*))\s+[""']([^""']*)[""']";
+        foreach (Match match in Regex.Matches(query, optionPattern, RegexOptions.IgnoreCase))
+        {
+            var optionName = (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value)
+                .ToLowerInvariant();
+            if (optionName == "method")
+            {
+                outputMethod = match.Groups[3].Value.ToLowerInvariant() switch
+                {
+                    "json" => OutputMethod.Json,
+                    "xml" => OutputMethod.Xml,
+                    "text" => OutputMethod.Text,
+                    _ => OutputMethod.Adaptive
+                };
+                break;
+            }
+        }
     }
 
     // Set up the document environment
@@ -148,7 +172,7 @@ try
     }
 
     // Execute with context document if available
-    var serializer = new ResultSerializer(env, Console.Out, options.OutputMethod);
+    var serializer = new ResultSerializer(env, Console.Out, outputMethod);
 
     var execSw = Stopwatch.StartNew();
     using var context = engine.CreateContext(initialContextItem: contextDocument);
@@ -157,9 +181,9 @@ try
     await foreach (var result in compilationResult.ExecutionPlan!.ExecuteAsync(context))
     {
         // Adaptive serialization: separate items with newlines (XQuery Serialization §12)
-        if (itemCount > 0 && options.OutputMethod == OutputMethod.Adaptive)
+        if (itemCount > 0 && outputMethod == OutputMethod.Adaptive)
             Console.WriteLine();
-        else if (itemCount > 0 && options.OutputMethod == OutputMethod.Text)
+        else if (itemCount > 0 && outputMethod == OutputMethod.Text)
             Console.Write(' ');
         serializer.Serialize(result);
         itemCount++;
@@ -299,7 +323,7 @@ static void PrintUsage()
         Options:
           -f, --file <path>  Read XQuery from a file instead of inline
           -o, --output <method>
-                             Output method: adaptive (default), xml, text
+                             Output method: adaptive (default), xml, text, json
           --stdin            Read XML input from stdin (waits indefinitely)
           --timeout <ms>     Stdin auto-detection timeout in ms (default: 200)
           --timing           Show parse/compile/execute timing breakdown
@@ -339,6 +363,7 @@ file sealed class CliOptions
     public string? QueryFile { get; init; }
     public List<string> Sources { get; init; } = [];
     public OutputMethod OutputMethod { get; init; } = OutputMethod.Adaptive;
+    public bool OutputMethodExplicit { get; init; }
     public bool ReadStdin { get; init; }
     public bool ExplicitStdin { get; init; }
     public int StdinTimeout { get; init; } = 200;
@@ -355,6 +380,7 @@ file sealed class CliOptions
         string? queryFile = null;
         var sources = new List<string>();
         var outputMethod = OutputMethod.Adaptive;
+        var outputMethodExplicit = false;
         var readStdin = false;
         var explicitStdin = false;
         var stdinTimeout = 200;
@@ -383,8 +409,10 @@ file sealed class CliOptions
                 {
                     "xml" => OutputMethod.Xml,
                     "text" => OutputMethod.Text,
+                    "json" => OutputMethod.Json,
                     _ => OutputMethod.Adaptive
                 };
+                outputMethodExplicit = true;
                 expectingOutput = false;
                 continue;
             }
@@ -455,6 +483,7 @@ file sealed class CliOptions
             QueryFile = queryFile,
             Sources = sources,
             OutputMethod = outputMethod,
+            OutputMethodExplicit = outputMethodExplicit,
             ReadStdin = readStdin,
             ExplicitStdin = explicitStdin,
             StdinTimeout = stdinTimeout,
