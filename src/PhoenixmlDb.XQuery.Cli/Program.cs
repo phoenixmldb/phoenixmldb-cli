@@ -151,9 +151,7 @@ try
     var serializer = new ResultSerializer(env, Console.Out, options.OutputMethod);
 
     var execSw = Stopwatch.StartNew();
-    using var context = engine.CreateContext();
-    if (contextDocument != null)
-        context.PushContextItem(contextDocument);
+    using var context = engine.CreateContext(initialContextItem: contextDocument);
 
     var itemCount = 0;
     await foreach (var result in compilationResult.ExecutionPlan!.ExecuteAsync(context))
@@ -166,9 +164,6 @@ try
         serializer.Serialize(result);
         itemCount++;
     }
-
-    if (contextDocument != null)
-        context.PopContextItem();
     execSw.Stop();
 
     if (itemCount > 0)

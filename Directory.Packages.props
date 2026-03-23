@@ -5,7 +5,7 @@
   <ItemGroup>
     <!-- PhoenixmlDb -->
     <PackageVersion Include="PhoenixmlDb.Core" Version="1.0.13" />
-    <PackageVersion Include="PhoenixmlDb.XQuery" Version="1.0.13" />
+    <PackageVersion Include="PhoenixmlDb.XQuery" Version="1.0.14" />
     <PackageVersion Include="PhoenixmlDb.Xslt" Version="1.0.15" />
     <!-- Storage -->
     <PackageVersion Include="LightningDB" Version="0.16.0" />
