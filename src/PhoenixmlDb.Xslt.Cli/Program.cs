@@ -241,6 +241,23 @@ try
         await Console.Error.WriteLineAsync(
             $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
             .ConfigureAwait(true);
+
+        // Memory footprint — useful for verifying streaming actually keeps memory low
+        // even with huge input. Peak working set is the OS-level RSS (process-wide),
+        // total managed allocations is the cumulative GC allocation throughout the run.
+        // For streaming, peak working set should stay roughly flat as input grows;
+        // for tree-based, both grow linearly with input size.
+        try
+        {
+            var proc = System.Diagnostics.Process.GetCurrentProcess();
+            proc.Refresh();
+            var peakBytes = proc.PeakWorkingSet64;
+            var totalAlloc = GC.GetTotalAllocatedBytes(precise: true);
+            await Console.Error.WriteLineAsync(
+                $"  memory:  peak working set {FormatBytes(peakBytes)}, allocated {FormatBytes(totalAlloc)}")
+                .ConfigureAwait(true);
+        }
+        catch { /* memory stats are best-effort */ }
     }
 
     return 0;
@@ -264,6 +281,18 @@ catch (Exception ex)
     }
 
     throw;
+}
+
+static string FormatBytes(long bytes)
+{
+    const double KiB = 1024d, MiB = KiB * 1024, GiB = MiB * 1024;
+    return bytes switch
+    {
+        >= (long)GiB => $"{bytes / GiB:F2} GiB",
+        >= (long)MiB => $"{bytes / MiB:F2} MiB",
+        >= (long)KiB => $"{bytes / KiB:F2} KiB",
+        _ => $"{bytes} B"
+    };
 }
 
 static (string Name, string? Namespace) ResolveCliQName(string qname)
@@ -307,7 +336,8 @@ static void PrintUsage()
                              Start with a named template instead of matching
           -im, --initial-mode <name>
                              Set the initial mode for template matching
-          --timing           Show parse/compile/transform timing breakdown
+          --timing           Show parse/compile/transform timing + memory footprint
+                             (peak working set + total managed allocations)
           --trace            Log template matching, function calls, built-in rules
           --dry-run          Parse and compile only, do not execute
           --stream           Use streaming for large files (lower memory usage)

@@ -177,6 +177,11 @@ try
     var execSw = Stopwatch.StartNew();
     using var context = engine.CreateContext(initialContextItem: contextDocument);
 
+    // Bind --param name=value pairs to external variable declarations in the prolog.
+    // The query's `declare variable $foo external;` picks these up at execution time.
+    foreach (var (name, value) in options.Parameters)
+        context.SetExternalVariable(name, value);
+
     var itemCount = 0;
     await foreach (var result in compilationResult.ExecutionPlan!.ExecuteAsync(context))
     {
@@ -204,6 +209,20 @@ try
         await Console.Error.WriteLineAsync(
             $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
             .ConfigureAwait(true);
+
+        // Memory footprint — peak working set is the OS-level RSS (process-wide),
+        // total managed allocations is the cumulative GC allocation throughout the run.
+        try
+        {
+            var proc = System.Diagnostics.Process.GetCurrentProcess();
+            proc.Refresh();
+            var peakBytes = proc.PeakWorkingSet64;
+            var totalAlloc = GC.GetTotalAllocatedBytes(precise: true);
+            await Console.Error.WriteLineAsync(
+                $"  memory:  peak working set {FormatBytes(peakBytes)}, allocated {FormatBytes(totalAlloc)}")
+                .ConfigureAwait(true);
+        }
+        catch { /* memory stats are best-effort */ }
     }
 
     return 0;
@@ -227,6 +246,18 @@ catch (Exception ex)
     }
 
     throw;
+}
+
+static string FormatBytes(long bytes)
+{
+    const double KiB = 1024d, MiB = KiB * 1024, GiB = MiB * 1024;
+    return bytes switch
+    {
+        >= (long)GiB => $"{bytes / GiB:F2} GiB",
+        >= (long)MiB => $"{bytes / MiB:F2} MiB",
+        >= (long)KiB => $"{bytes / KiB:F2} KiB",
+        _ => $"{bytes} B"
+    };
 }
 
 static void DumpPlan(PhysicalOperator op, TextWriter writer, int indent)
@@ -324,9 +355,14 @@ static void PrintUsage()
           -f, --file <path>  Read XQuery from a file instead of inline
           -o, --output <method>
                              Output method: adaptive (default), xml, text, json
+          -p, --param <name>=<value>
+                             Bind an external variable (matches a prolog
+                             `declare variable $<name> external;`).
+                             Combined form: -p:name=value or --param:name=value
+                             May be repeated.
           --stdin            Read XML input from stdin (waits indefinitely)
           --timeout <ms>     Stdin auto-detection timeout in ms (default: 200)
-          --timing           Show parse/compile/execute timing breakdown
+          --timing           Show parse/compile/execute timing + memory footprint
           --plan             Show the execution plan before running
           --dry-run          Parse and compile only, do not execute
           -v, --verbose      Show detailed error information
@@ -373,6 +409,7 @@ file sealed class CliOptions
     public bool ShowHelp { get; init; }
     public bool ShowVersion { get; init; }
     public bool Verbose { get; init; }
+    public List<(string Name, string Value)> Parameters { get; init; } = new();
 
     public static CliOptions Parse(string[] args)
     {
@@ -393,6 +430,8 @@ file sealed class CliOptions
         var expectingFile = false;
         var expectingOutput = false;
         var expectingTimeout = false;
+        var expectingParam = false;
+        var parameters = new List<(string Name, string Value)>();
 
         foreach (var arg in args)
         {
@@ -422,6 +461,17 @@ file sealed class CliOptions
                 if (int.TryParse(arg, out var ms))
                     stdinTimeout = ms;
                 expectingTimeout = false;
+                continue;
+            }
+
+            if (expectingParam)
+            {
+                var eqIdx = arg.IndexOf('=', StringComparison.Ordinal);
+                if (eqIdx > 0)
+                    parameters.Add((arg[..eqIdx], arg[(eqIdx + 1)..]));
+                else
+                    parameters.Add((arg, ""));
+                expectingParam = false;
                 continue;
             }
 
@@ -458,7 +508,22 @@ file sealed class CliOptions
                 case "-v" or "--verbose":
                     verbose = true;
                     break;
+                case "-p" or "--param":
+                    expectingParam = true;
+                    break;
                 default:
+                    // Combined form: -p:name=value or --param:name=value
+                    if (arg.StartsWith("-p:", StringComparison.Ordinal) || arg.StartsWith("--param:", StringComparison.Ordinal))
+                    {
+                        var paramPart = arg.StartsWith("-p:", StringComparison.Ordinal) ? arg[3..] : arg[8..];
+                        var eqIdx = paramPart.IndexOf('=', StringComparison.Ordinal);
+                        if (eqIdx > 0)
+                            parameters.Add((paramPart[..eqIdx], paramPart[(eqIdx + 1)..]));
+                        else
+                            parameters.Add((paramPart, ""));
+                        break;
+                    }
+
                     if (query == null && queryFile == null)
                         query = arg;
                     else
@@ -492,7 +557,8 @@ file sealed class CliOptions
             DryRun = dryRun,
             ShowHelp = showHelp,
             ShowVersion = showVersion,
-            Verbose = verbose
+            Verbose = verbose,
+            Parameters = parameters
         };
     }
 }
