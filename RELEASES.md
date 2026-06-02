@@ -2,6 +2,22 @@
 
 Both `PhoenixmlDb.Xslt.Cli` (the `xslt` global tool) and `PhoenixmlDb.XQuery.Cli` (the `xquery` global tool) ship from this repo with a single shared version.
 
+## 1.4.1 (2026-06-02)
+
+Catch-up release aligning CLIs to current engine generation.
+
+### Engine bumps
+
+- `PhoenixmlDb.XQuery` 1.4.0 → **1.4.1** — QT3 production sweep round: EQName parser fix (`Q{uri}localname` with reserved local names), `fn:deep-equal` collation atomization, `fn:format-number` module-local decimal-format isolation, module library functions use own copy-namespaces mode, parse-time XPST0051 honors constructor-local default-element-namespace, value-comparison XPTY0004 for date/time vs incompatible type, `function(*)` matches map/array values, more.
+- `PhoenixmlDb.Xslt` 1.3.22 → **1.4.1** — two-release jump covering:
+  - **1.3.23 streaming output overhaul** (Martin Honnen 2026-05-28 memory report): incremental `TransformAsync(XmlReader, TextWriter)` / `TransformAsync(Stream, TextWriter)`, peak working-set ~270× reduction for streamed identity (17.2 MiB on 1M items vs hundreds of MiB before); `TransformAsync(Stream, Stream)` skips `ReadToEndAsync` fast-path when streamable; for-each in `xsl:source-document` now drives the streaming pass.
+  - **1.4.0 streaming conformance overhaul**: W3C XSLT 3.0 streaming jumped 71.3% → 80.5% (1898/2358 tests, 36+ sets at 100%). Mixed sequences in for-each select; `text()` KindTest tail; attribute-axis tail with attribute-as-context-item; last-step predicates; `fn:data()` unwrap; SimpleMap recognition; descendant axis with nested same-name; snapshot+tail composition; function-item args for HOFs; motionless predicates on aggregation watchers; `XdmElement._stringValue` populated by variable construction; `xsl:copy/@select` arity check.
+  - **1.4.1 hotfix** (Martin Honnen 2026-06-01 report): Blazor WebAssembly DocBook XSLT regression. `XsltTransformProvider.LoadStylesheetAsync` now consults `PreloadedResources` before `HttpResourceLoader` (was throwing `FOXT0001` on WASM); `HttpImportPreloader` walker recognizes `(fn:)?transform()` with literal `stylesheet-location` URLs (DocBook TNG pipeline modules now auto-discovered).
+
+### CLI behavior
+
+No CLI-side feature changes in this release — pure engine-version catch-up. The CLI tools transparently inherit all engine improvements above.
+
 ## 1.4.0 (2026-05-24)
 
 **First release on the modern engine line.** Previously the CLI shipped against engine packages from the 1.0.x line, which by mid-2026 had fallen ~100 releases behind. This release moves the CLI to the current engine generation; subsequent releases will track the engine via CPM pin bumps as they happen.
