@@ -1,11 +1,15 @@
 using System.Diagnostics;
+using System.Reflection;
 using PhoenixmlDb.Xslt;
 
 var options = CliOptions.Parse(args);
 
 if (options.ShowVersion)
 {
-    Console.WriteLine("xslt 1.1.0 (PhoenixmlDb XSLT 3.0/4.0)");
+    var version = (Assembly.GetExecutingAssembly()
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? "0.0.0").Split('+')[0];
+    Console.WriteLine($"xslt {version} (PhoenixmlDb XSLT 3.0/4.0)");
     return 0;
 }
 

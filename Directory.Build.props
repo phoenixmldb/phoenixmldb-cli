@@ -9,9 +9,9 @@
     <NoWarn>$(NoWarn);CS1591;CA1031</NoWarn>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest-all</AnalysisLevel>
-    <Version>1.4.1</Version>
+    <Version>1.4.5</Version>
     <PackageReleaseNotes>
-      Catch-up release aligning CLIs to current engine generation. Bumps PhoenixmlDb.XQuery 1.4.0 → 1.4.1 (QT3 production sweep + EQName parser + collation/comparison fixes) and PhoenixmlDb.Xslt 1.3.22 → 1.4.1, which includes: W3C XSLT 3.0 streaming conformance jump from 71.3% to 80.5% (1898/2358 tests, 36+ sets at 100%), incremental streaming output (TransformAsync(XmlReader,TextWriter) and TransformAsync(Stream,TextWriter)) cutting peak working-set ~270x for streamed identity transforms, broad streaming for-each support inside xsl:source-document, and the 1.4.1 hotfix for Blazor WebAssembly DocBook XSLT (fn:transform + HttpImportPreloader honour PreloadedResources). See RELEASES.md for full notes.
+      Aligns the CLIs to the current engine generation: PhoenixmlDb.XQuery 1.4.1 → 1.4.3 and PhoenixmlDb.Xslt 1.4.1 → 1.4.5 (with PhoenixmlDb.Core 1.1.7). XPath/XSLT 4.0 maps now iterate in entry/insertion order as a structural guarantee — xsl:map, map constructors, records, JSON-object maps, and map:put all preserve position. Also includes the variadic-arity resolution fix (array:slice, fn:slice, array:build, map:build, fn:highest, fn:lowest, ft:thesaurus-lookup now resolve across their full arity range). See RELEASES.md for full notes.
     </PackageReleaseNotes>
   </PropertyGroup>
 
