@@ -9,9 +9,9 @@
     <NoWarn>$(NoWarn);CS1591;CA1031</NoWarn>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest-all</AnalysisLevel>
-    <Version>1.4.5</Version>
+    <Version>1.4.6</Version>
     <PackageReleaseNotes>
-      Aligns the CLIs to the current engine generation: PhoenixmlDb.XQuery 1.4.1 → 1.4.3 and PhoenixmlDb.Xslt 1.4.1 → 1.4.5 (with PhoenixmlDb.Core 1.1.7). XPath/XSLT 4.0 maps now iterate in entry/insertion order as a structural guarantee — xsl:map, map constructors, records, JSON-object maps, and map:put all preserve position. Also includes the variadic-arity resolution fix (array:slice, fn:slice, array:build, map:build, fn:highest, fn:lowest, ft:thesaurus-lookup now resolve across their full arity range). See RELEASES.md for full notes.
+      Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.6, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8. XSLT: deeply-recursive stylesheets now raise a catchable error instead of crashing; key() matches attribute/text use-values against string keys; parse-json arrays and indent on JSON/map input fixed. XQuery: numeric operators/aggregates over derived integer types, array:sort collation, SENR0001 for free-standing attributes, and CR/NEL/control-character escaping in xml/html serialization. See RELEASES.md for full notes.
     </PackageReleaseNotes>
   </PropertyGroup>
 

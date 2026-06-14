@@ -2,6 +2,20 @@
 
 Both `PhoenixmlDb.Xslt.Cli` (the `xslt` global tool) and `PhoenixmlDb.XQuery.Cli` (the `xquery` global tool) ship from this repo with a single shared version.
 
+## 1.4.6 (2026-06-14)
+
+Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.6, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8.
+
+### XSLT
+- Deeply-recursive stylesheets now raise a catchable error instead of exhausting the native stack and crashing the process.
+- `key()` now matches attribute/text `use` values (which atomize to `xs:untypedAtomic`) against string lookup keys, so keys defined with `use="@attr"` resolve.
+- `parse-json` of a top-level JSON array yields `array(*)`, and `indent="yes"` applies to output built from a JSON/map initial context item.
+
+### XQuery
+- Numeric operators and aggregates (unary `+`/`-`, `avg`, `sum`, `min`, `max`, `round-half-to-even`, `abs`, `ceiling`, `floor`) handle derived integer types (`xs:long`, `xs:int`, …) correctly and exactly.
+- `array:sort` honors the default/declared or supplied collation instead of always sorting by codepoint.
+- A free-standing attribute node under the xml/html output method raises `SENR0001`; the xml/html methods escape CR/NEL/LINE-SEPARATOR/C1 controls as numeric character references.
+
 ## 1.4.1 (2026-06-02)
 
 Catch-up release aligning CLIs to current engine generation.
