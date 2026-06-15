@@ -2,6 +2,12 @@
 
 Both `PhoenixmlDb.Xslt.Cli` (the `xslt` global tool) and `PhoenixmlDb.XQuery.Cli` (the `xquery` global tool) ship from this repo with a single shared version.
 
+## 1.4.7 (2026-06-14)
+
+Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.7, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8.
+
+Picks up the XSLT 1.4.7 fix: JSON map/array values fed through the `XdmSequence` transform overload serialize as JSON instead of a CLR type name, and a top-level JSON array is no longer unwrapped to its first member. Everything in 1.4.6 below is included (1.4.6 was never published).
+
 ## 1.4.6 (2026-06-14)
 
 Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.6, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8.

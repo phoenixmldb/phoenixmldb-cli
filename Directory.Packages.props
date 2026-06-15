@@ -6,7 +6,7 @@
     <!-- PhoenixmlDb -->
     <PackageVersion Include="PhoenixmlDb.Core" Version="1.1.8" />
     <PackageVersion Include="PhoenixmlDb.XQuery" Version="1.4.4" />
-    <PackageVersion Include="PhoenixmlDb.Xslt" Version="1.4.6" />
+    <PackageVersion Include="PhoenixmlDb.Xslt" Version="1.4.7" />
     <!-- Storage -->
     <PackageVersion Include="LightningDB" Version="0.16.0" />
     <!-- gRPC / Protobuf -->
