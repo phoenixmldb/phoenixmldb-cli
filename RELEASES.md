@@ -2,6 +2,12 @@
 
 Both `PhoenixmlDb.Xslt.Cli` (the `xslt` global tool) and `PhoenixmlDb.XQuery.Cli` (the `xquery` global tool) ship from this repo with a single shared version.
 
+## 1.4.8 (2026-06-14)
+
+Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.8, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8.
+
+Picks up XSLT 1.4.8: a parsed JSON array fed to `apply-templates` is treated as a single item rather than iterated as its members, and the item-processing instructions (`for-each`, `iterate`, `for-each-group`, `perform-sort`, `merge`) no longer flatten a selected array/map. (1.4.7 was never published; its JSON-`XdmSequence` round-trip fixes are included here.)
+
 ## 1.4.7 (2026-06-14)
 
 Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.7, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8.

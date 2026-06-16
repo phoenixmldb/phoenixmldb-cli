@@ -9,9 +9,9 @@
     <NoWarn>$(NoWarn);CS1591;CA1031</NoWarn>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest-all</AnalysisLevel>
-    <Version>1.4.7</Version>
+    <Version>1.4.8</Version>
     <PackageReleaseNotes>
-      Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.7, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8. XSLT: JSON map/array values fed via the XdmSequence transform overload now serialize as JSON (and a top-level JSON array is no longer unwrapped to its first member); deeply-recursive stylesheets raise a catchable error instead of crashing; key() matches attribute/text use-values against string keys; parse-json arrays and indent on JSON/map input fixed. XQuery: numeric operators/aggregates over derived integer types, array:sort collation, SENR0001 for free-standing attributes, and CR/NEL/control-character escaping in xml/html serialization. See RELEASES.md for full notes.
+      Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.8, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8. XSLT 1.4.8: a parsed JSON array fed to apply-templates is treated as one item, and item-processing instructions (for-each, iterate, for-each-group, perform-sort, merge) no longer flatten a selected array/map. Also includes the 1.4.7 JSON-XdmSequence round-trip fixes, the recursion guard, key() attribute/text matching, and parse-json/indent fixes. XQuery: numeric operators/aggregates over derived integer types, array:sort collation, SENR0001, and control-character escaping in xml/html serialization. See RELEASES.md for full notes.
     </PackageReleaseNotes>
   </PropertyGroup>
 
