@@ -6,13 +6,19 @@ using PhoenixmlDb.XQuery.Cli;
 using PhoenixmlDb.XQuery.Execution;
 using PhoenixmlDb.Xdm.Nodes;
 
+// Wire fn:transform() by registering the XSLT provider eagerly. PhoenixmlDb.Xslt 1.2.8+
+// ships a [ModuleInitializer] that does this on assembly load, but the runtime only
+// loads an assembly when one of its types is first executed — `typeof(...)` is not
+// enough on net10. The new() forces JIT of XsltTransformProvider, which loads the
+// assembly, runs ModuleInitializer, and assigns TransformFunction.Provider. Doing it
+// explicitly here also serves as a belt-and-braces guard for older Xslt versions.
+PhoenixmlDb.XQuery.Functions.TransformFunction.Provider ??= new PhoenixmlDb.Xslt.XsltTransformProvider();
+
 var options = CliOptions.Parse(args);
 
 if (options.ShowVersion)
 {
-    var version = (Assembly.GetExecutingAssembly()
-        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-        ?? "0.0.0").Split('+')[0];
+    var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
     Console.WriteLine($"xquery {version} (PhoenixmlDb XQuery/XPath 4.0)");
     return 0;
 }
@@ -126,12 +132,15 @@ try
 
     // Create and configure the query engine
     var engine = new QueryEngine(
-        nodeProvider: env,
-        documentResolver: env);
+        nodeProvider: env.Store,
+        documentResolver: env.Store);
 
-    // Compile the query
+    // Compile the query — pass base URI for module import resolution
     var compileSw = Stopwatch.StartNew();
-    var compilationResult = engine.Compile(query);
+    var queryBaseUri = options.QueryFile != null
+        ? new Uri(Path.GetFullPath(options.QueryFile)).AbsoluteUri
+        : new Uri(Path.GetFullPath(".") + "/").AbsoluteUri;
+    var compilationResult = engine.Compile(query, new CompilationOptions { BaseUri = queryBaseUri });
     compileSw.Stop();
 
     if (!compilationResult.Success)
@@ -175,15 +184,27 @@ try
     }
 
     // Execute with context document if available
-    var serializer = new ResultSerializer(env, Console.Out, outputMethod);
+    var serializer = new ResultSerializer(env.Store, Console.Out, outputMethod);
 
     var execSw = Stopwatch.StartNew();
-    using var context = engine.CreateContext(initialContextItem: contextDocument);
+    PhoenixmlDb.XQuery.Execution.QueryExecutionLimits? cliLimits = null;
+    if (options.MaxResultItems is { } cap)
+    {
+        // 0 (or any non-positive value) disables the cap by raising it to int.MaxValue.
+        cliLimits = new PhoenixmlDb.XQuery.Execution.QueryExecutionLimits
+        {
+            MaxResultItems = cap <= 0 ? int.MaxValue : cap
+        };
+    }
+    using var context = engine.CreateContext(
+        initialContextItem: contextDocument,
+        staticBaseUri: compilationResult.BaseUri,
+        limits: cliLimits);
 
-    // Bind --param name=value pairs to external variable declarations in the prolog.
-    // The query's `declare variable $foo external;` picks these up at execution time.
     foreach (var (name, value) in options.Parameters)
+    {
         context.SetExternalVariable(name, value);
+    }
 
     var itemCount = 0;
     await foreach (var result in compilationResult.ExecutionPlan!.ExecuteAsync(context))
@@ -212,20 +233,11 @@ try
         await Console.Error.WriteLineAsync(
             $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
             .ConfigureAwait(true);
-
-        // Memory footprint — peak working set is the OS-level RSS (process-wide),
-        // total managed allocations is the cumulative GC allocation throughout the run.
-        try
-        {
-            var proc = System.Diagnostics.Process.GetCurrentProcess();
-            proc.Refresh();
-            var peakBytes = proc.PeakWorkingSet64;
-            var totalAlloc = GC.GetTotalAllocatedBytes(precise: true);
-            await Console.Error.WriteLineAsync(
-                $"  memory:  peak working set {FormatBytes(peakBytes)}, allocated {FormatBytes(totalAlloc)}")
-                .ConfigureAwait(true);
-        }
-        catch { /* memory stats are best-effort */ }
+        var peakBytes = Process.GetCurrentProcess().PeakWorkingSet64;
+        var allocBytes = GC.GetTotalAllocatedBytes(precise: false);
+        await Console.Error.WriteLineAsync(
+            $"  memory:  peak={FormatBytes(peakBytes)}  allocated={FormatBytes(allocBytes)}")
+            .ConfigureAwait(true);
     }
 
     return 0;
@@ -253,14 +265,13 @@ catch (Exception ex)
 
 static string FormatBytes(long bytes)
 {
-    const double KiB = 1024d, MiB = KiB * 1024, GiB = MiB * 1024;
-    return bytes switch
-    {
-        >= (long)GiB => $"{bytes / GiB:F2} GiB",
-        >= (long)MiB => $"{bytes / MiB:F2} MiB",
-        >= (long)KiB => $"{bytes / KiB:F2} KiB",
-        _ => $"{bytes} B"
-    };
+    const double KiB = 1024d;
+    const double MiB = KiB * 1024d;
+    const double GiB = MiB * 1024d;
+    if (bytes >= GiB) return $"{bytes / GiB:F2} GiB";
+    if (bytes >= MiB) return $"{bytes / MiB:F2} MiB";
+    if (bytes >= KiB) return $"{bytes / KiB:F2} KiB";
+    return $"{bytes} B";
 }
 
 static void DumpPlan(PhysicalOperator op, TextWriter writer, int indent)
@@ -358,14 +369,15 @@ static void PrintUsage()
           -f, --file <path>  Read XQuery from a file instead of inline
           -o, --output <method>
                              Output method: adaptive (default), xml, text, json
-          -p, --param <name>=<value>
-                             Bind an external variable (matches a prolog
-                             `declare variable $<name> external;`).
-                             Combined form: -p:name=value or --param:name=value
-                             May be repeated.
           --stdin            Read XML input from stdin (waits indefinitely)
           --timeout <ms>     Stdin auto-detection timeout in ms (default: 200)
-          --timing           Show parse/compile/execute timing + memory footprint
+          -p, --param <name=value>
+                             Bind an external variable. Repeat for multiple.
+                             Also supports -p:name=value / --param:name=value.
+          --timing           Show parse/compile/execute timing + memory usage
+          --max-results <N>  Raise the materialization cap (default 2,000,000).
+                             Use 0 to disable. Needed for queries that build very
+                             large sequences or element constructors.
           --plan             Show the execution plan before running
           --dry-run          Parse and compile only, do not execute
           -v, --verbose      Show detailed error information
@@ -412,7 +424,14 @@ file sealed class CliOptions
     public bool ShowHelp { get; init; }
     public bool ShowVersion { get; init; }
     public bool Verbose { get; init; }
-    public List<(string Name, string Value)> Parameters { get; init; } = new();
+    public List<(string Name, string Value)> Parameters { get; init; } = [];
+    /// <summary>
+    /// Cap on items materialised into a single in-memory collection. The default
+    /// 2,000,000 fits well within process memory for typical query results but
+    /// rejects legitimate large-output queries (e.g. constructing a 10M-child
+    /// element). Pass <c>--max-results=0</c> to disable the cap entirely.
+    /// </summary>
+    public int? MaxResultItems { get; init; }
 
     public static CliOptions Parse(string[] args)
     {
@@ -434,7 +453,23 @@ file sealed class CliOptions
         var expectingOutput = false;
         var expectingTimeout = false;
         var expectingParam = false;
+        var expectingMaxResults = false;
+        int? maxResultItems = null;
         var parameters = new List<(string Name, string Value)>();
+
+        static bool TryParseParam(string spec, out string name, out string value)
+        {
+            var eq = spec.IndexOf('=', StringComparison.Ordinal);
+            if (eq <= 0)
+            {
+                name = "";
+                value = "";
+                return false;
+            }
+            name = spec[..eq];
+            value = spec[(eq + 1)..];
+            return true;
+        }
 
         foreach (var arg in args)
         {
@@ -442,6 +477,14 @@ file sealed class CliOptions
             {
                 queryFile = arg;
                 expectingFile = false;
+                continue;
+            }
+
+            if (expectingParam)
+            {
+                if (TryParseParam(arg, out var pn, out var pv))
+                    parameters.Add((pn, pv));
+                expectingParam = false;
                 continue;
             }
 
@@ -467,14 +510,11 @@ file sealed class CliOptions
                 continue;
             }
 
-            if (expectingParam)
+            if (expectingMaxResults)
             {
-                var eqIdx = arg.IndexOf('=', StringComparison.Ordinal);
-                if (eqIdx > 0)
-                    parameters.Add((arg[..eqIdx], arg[(eqIdx + 1)..]));
-                else
-                    parameters.Add((arg, ""));
-                expectingParam = false;
+                if (int.TryParse(arg, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var cap))
+                    maxResultItems = cap;
+                expectingMaxResults = false;
                 continue;
             }
 
@@ -514,20 +554,22 @@ file sealed class CliOptions
                 case "-p" or "--param":
                     expectingParam = true;
                     break;
+                case "--max-results":
+                    expectingMaxResults = true;
+                    break;
                 default:
-                    // Combined form: -p:name=value or --param:name=value
-                    if (arg.StartsWith("-p:", StringComparison.Ordinal) || arg.StartsWith("--param:", StringComparison.Ordinal))
+                    if (arg.StartsWith("--max-results=", StringComparison.Ordinal))
                     {
-                        var paramPart = arg.StartsWith("-p:", StringComparison.Ordinal) ? arg[3..] : arg[8..];
-                        var eqIdx = paramPart.IndexOf('=', StringComparison.Ordinal);
-                        if (eqIdx > 0)
-                            parameters.Add((paramPart[..eqIdx], paramPart[(eqIdx + 1)..]));
-                        else
-                            parameters.Add((paramPart, ""));
-                        break;
+                        if (int.TryParse(arg["--max-results=".Length..], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var cap))
+                            maxResultItems = cap;
                     }
-
-                    if (query == null && queryFile == null)
+                    else if (arg.StartsWith("-p:", StringComparison.Ordinal) || arg.StartsWith("--param:", StringComparison.Ordinal))
+                    {
+                        var spec = arg.StartsWith("--param:", StringComparison.Ordinal) ? arg["--param:".Length..] : arg["-p:".Length..];
+                        if (TryParseParam(spec, out var pn, out var pv))
+                            parameters.Add((pn, pv));
+                    }
+                    else if (query == null && queryFile == null)
                         query = arg;
                     else
                         sources.Add(arg);
@@ -561,7 +603,8 @@ file sealed class CliOptions
             ShowHelp = showHelp,
             ShowVersion = showVersion,
             Verbose = verbose,
-            Parameters = parameters
+            Parameters = parameters,
+            MaxResultItems = maxResultItems,
         };
     }
 }

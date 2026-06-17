@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <PackageReference Include="PhoenixmlDb.XQuery" />
+    <!-- Wires fn:transform via XsltTransformProvider, matching the in-repo xquery4 CLI. -->
+    <PackageReference Include="PhoenixmlDb.Xslt" />
   </ItemGroup>
 
   <ItemGroup>
