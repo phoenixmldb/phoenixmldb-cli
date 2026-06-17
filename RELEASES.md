@@ -2,6 +2,10 @@
 
 Both `PhoenixmlDb.Xslt.Cli` (the `xslt` global tool) and `PhoenixmlDb.XQuery.Cli` (the `xquery` global tool) ship from this repo with a single shared version.
 
+## 1.4.10 (2026-06-17)
+
+Aligns both CLIs to the current engine generation: PhoenixmlDb.Core 1.1.9, PhoenixmlDb.XQuery 1.4.6, PhoenixmlDb.Xslt 1.4.10. Picks up the engine fixes (Martin Honnen): streaming `xsl:template match="/"` now fires under `streamable="yes"`, and base URI is preserved across temporary-tree copy boundaries / `fn:transform` results (DocBook xslTNG `FORG0002`).
+
 ## 1.4.9 (2026-06-16)
 
 Aligns both CLIs to the current engine generation: PhoenixmlDb.Core 1.1.9, PhoenixmlDb.XQuery 1.4.5, PhoenixmlDb.Xslt 1.4.9.
