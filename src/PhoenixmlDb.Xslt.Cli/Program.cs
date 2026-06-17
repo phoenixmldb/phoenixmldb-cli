@@ -1,14 +1,12 @@
 using System.Diagnostics;
-using System.Reflection;
+using System.Net.Http;
 using PhoenixmlDb.Xslt;
 
 var options = CliOptions.Parse(args);
 
 if (options.ShowVersion)
 {
-    var version = (Assembly.GetExecutingAssembly()
-        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-        ?? "0.0.0").Split('+')[0];
+    var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
     Console.WriteLine($"xslt {version} (PhoenixmlDb XSLT 3.0/4.0)");
     return 0;
 }
@@ -23,22 +21,63 @@ try
 {
     var totalSw = Stopwatch.StartNew();
 
-    // Load the stylesheet
-    var stylesheetPath = Path.GetFullPath(options.Stylesheet);
-    if (!File.Exists(stylesheetPath))
-    {
-        await Console.Error.WriteLineAsync($"Error: Stylesheet not found: {options.Stylesheet}").ConfigureAwait(true);
-        return 1;
-    }
-
+    // Load the stylesheet — accept either a local path or an http(s):// URL. URL form
+    // is fetched via HttpClient so users can run e.g.
+    //     xslt https://example.com/stylesheets/transform.xsl input.xml
+    // without first downloading the stylesheet manually.
+    string stylesheetXml;
+    Uri stylesheetUri;
     var readSw = Stopwatch.StartNew();
-    var stylesheetXml = await File.ReadAllTextAsync(stylesheetPath).ConfigureAwait(true);
-    var stylesheetUri = new Uri(stylesheetPath);
+    if (Uri.TryCreate(options.Stylesheet, UriKind.Absolute, out var absUri)
+        && (absUri.Scheme == Uri.UriSchemeHttp || absUri.Scheme == Uri.UriSchemeHttps))
+    {
+        try
+        {
+            using var httpClient = new HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(30),
+            };
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("PhoenixmlDb.Xslt");
+            stylesheetXml = await httpClient.GetStringAsync(absUri).ConfigureAwait(true);
+            stylesheetUri = absUri;
+        }
+        catch (HttpRequestException ex)
+        {
+            await Console.Error.WriteLineAsync($"Error: Failed to fetch stylesheet '{options.Stylesheet}': {ex.Message}").ConfigureAwait(true);
+            return 1;
+        }
+        catch (TaskCanceledException)
+        {
+            await Console.Error.WriteLineAsync($"Error: Timeout fetching stylesheet '{options.Stylesheet}'").ConfigureAwait(true);
+            return 1;
+        }
+    }
+    else
+    {
+        var stylesheetPath = Path.GetFullPath(options.Stylesheet);
+        if (!File.Exists(stylesheetPath))
+        {
+            await Console.Error.WriteLineAsync($"Error: Stylesheet not found: {options.Stylesheet}").ConfigureAwait(true);
+            return 1;
+        }
+        stylesheetXml = await File.ReadAllTextAsync(stylesheetPath).ConfigureAwait(true);
+        stylesheetUri = new Uri(stylesheetPath);
+    }
     readSw.Stop();
 
     var compileSw = Stopwatch.StartNew();
     var transformer = new XsltTransformer();
-    await transformer.LoadStylesheetAsync(stylesheetXml, stylesheetUri).ConfigureAwait(true);
+    // Feed -p values into the static-param path too. Compile-time static parameters (used by
+    // xsl:use-when / xsl:value-of in shadow attributes) are resolved during stylesheet
+    // parsing; values supplied here override the param's default `select=` expression.
+    Dictionary<string, string>? staticParams = null;
+    if (options.Parameters.Count > 0)
+    {
+        staticParams = new Dictionary<string, string>();
+        foreach (var (name, value) in options.Parameters)
+            staticParams[name] = value;
+    }
+    await transformer.LoadStylesheetAsync(stylesheetXml, stylesheetUri, staticParams).ConfigureAwait(true);
     compileSw.Stop();
 
     if (options.Timing)
@@ -64,6 +103,14 @@ try
         return 0;
     }
 
+    // Wire up xsl:message output to stderr with source location
+    transformer.MessageListenerWithLocation = (message, terminate, line, col) =>
+    {
+        var loc = line > 0 ? $" ({line}:{col})" : "";
+        Console.Error.Write(terminate ? $"xsl:message terminate{loc}: " : $"xsl:message{loc}: ");
+        Console.Error.WriteLine(message);
+    };
+
     // Set up trace listener
     if (options.Trace)
     {
@@ -74,7 +121,11 @@ try
         };
     }
 
-    // Set parameters
+    // Set parameters. The same -p value is fed to both the static-param and runtime-param
+    // paths because the CLI doesn't (and shouldn't have to) know whether the user-named
+    // parameter is declared `static="yes"`. Static-param values are consumed at compile time
+    // by use-when / shadow-attribute evaluation; non-static values go to the global-init
+    // path where they're cast through function-conversion against the `as` type.
     foreach (var (name, value) in options.Parameters)
     {
         transformer.SetParameter(name, value);
@@ -94,27 +145,84 @@ try
         transformer.SetInitialMode(mName, mNs);
     }
 
-    // Load source document
+    // Load source document — accept either a local path or an http(s):// URL, mirroring
+    // the stylesheet-loading code path. Streaming mode (-s) requires a local file because
+    // we hand File.OpenRead to the streaming transformer; an HTTP source is downloaded
+    // first and then transformed in non-streaming mode.
     string? inputXml = null;
+    string? sourcePath = null;
+    // Tracks whether the streaming engine was used for this run — set inside the
+    // SourceFile branch once we know the source kind and whether the stylesheet
+    // is streamable. Drives the post-transform dispatch (e.g. skipping
+    // secondary-result-document writes that the streaming engine doesn't produce).
+    bool ranStreaming = false;
     if (options.SourceFile != null)
     {
         var sourceSw = Stopwatch.StartNew();
-        var sourcePath = Path.GetFullPath(options.SourceFile);
-        if (!File.Exists(sourcePath))
+        if (Uri.TryCreate(options.SourceFile, UriKind.Absolute, out var srcAbsUri)
+            && (srcAbsUri.Scheme == Uri.UriSchemeHttp || srcAbsUri.Scheme == Uri.UriSchemeHttps))
         {
-            await Console.Error.WriteLineAsync($"Error: Source file not found: {options.SourceFile}").ConfigureAwait(true);
-            return 1;
-        }
-
-        transformer.SetSourceDocumentUri(new Uri(sourcePath));
-
-        if (options.Stream)
-        {
+            try
+            {
+                using var srcHttp = new HttpClient
+                {
+                    Timeout = TimeSpan.FromSeconds(30),
+                };
+                srcHttp.DefaultRequestHeaders.UserAgent.ParseAdd("PhoenixmlDb.Xslt");
+                inputXml = await srcHttp.GetStringAsync(srcAbsUri).ConfigureAwait(true);
+            }
+            catch (HttpRequestException ex)
+            {
+                await Console.Error.WriteLineAsync($"Error: Failed to fetch source '{options.SourceFile}': {ex.Message}").ConfigureAwait(true);
+                return 1;
+            }
+            catch (TaskCanceledException)
+            {
+                await Console.Error.WriteLineAsync($"Error: Timeout fetching source '{options.SourceFile}'").ConfigureAwait(true);
+                return 1;
+            }
+            transformer.SetSourceDocumentUri(srcAbsUri);
             sourceSw.Stop();
             if (options.Timing)
             {
                 await Console.Error.WriteLineAsync(
-                    $"  source:  {sourceSw.Elapsed.TotalMilliseconds,8:F1} ms  (streaming)")
+                    $"  source:  {sourceSw.Elapsed.TotalMilliseconds,8:F1} ms  ({inputXml.Length:N0} chars over HTTP)")
+                    .ConfigureAwait(true);
+            }
+            // HTTP source loaded into inputXml; skip the file-based streaming branch below.
+        }
+        else
+        {
+            sourcePath = Path.GetFullPath(options.SourceFile);
+            if (!File.Exists(sourcePath))
+            {
+                await Console.Error.WriteLineAsync($"Error: Source file not found: {options.SourceFile}").ConfigureAwait(true);
+                return 1;
+            }
+
+            transformer.SetSourceDocumentUri(new Uri(sourcePath));
+        }
+
+        // Auto-stream when the stylesheet declares a streamable mode and the source is a
+        // local file — the engine already supports streaming for these inputs, so the
+        // CLI shouldn't make users remember --stream. --no-stream opts out; --stream is
+        // unchanged (explicit opt-in still works for non-streamable stylesheets if the
+        // user wants to try, with the existing fallback behaviour).
+        bool effectiveStream = options.Stream
+            || (!options.NoStream && sourcePath != null && transformer.HasStreamableMode);
+
+        // Streaming requires a local file (we hand the path to File.OpenRead). When the
+        // source is HTTP it has already been read into inputXml above; fall through to
+        // the in-memory transform path.
+        if (effectiveStream && sourcePath != null)
+        {
+            ranStreaming = true;
+            sourceSw.Stop();
+            if (options.Timing)
+            {
+                var streamLabel = options.Stream ? "streaming" : "auto-streaming";
+                await Console.Error.WriteLineAsync(
+                    $"  source:  {sourceSw.Elapsed.TotalMilliseconds,8:F1} ms  ({streamLabel})")
                     .ConfigureAwait(true);
             }
 
@@ -159,7 +267,7 @@ try
                     .ConfigureAwait(true);
             }
         }
-        else
+        else if (sourcePath != null)
         {
             inputXml = await File.ReadAllTextAsync(sourcePath).ConfigureAwait(true);
             sourceSw.Stop();
@@ -171,6 +279,7 @@ try
                     .ConfigureAwait(true);
             }
         }
+        // else: HTTP source already loaded into inputXml above
     }
     else if (Console.IsInputRedirected)
     {
@@ -181,8 +290,9 @@ try
             inputXml = null;
     }
 
-    // Run the transformation (non-streaming path)
-    if (!options.Stream || options.SourceFile == null)
+    // Run the transformation (non-streaming path) — unless the streaming dispatch
+    // above already produced output.
+    if (!ranStreaming)
     {
         var transformSw = Stopwatch.StartNew();
         var result = await transformer.TransformAsync(inputXml).ConfigureAwait(true);
@@ -213,7 +323,7 @@ try
     }
 
     // Write secondary result documents (non-streaming path only)
-    if (!options.Stream && transformer.SecondaryResultDocuments.Count > 0)
+    if (!ranStreaming && transformer.SecondaryResultDocuments.Count > 0)
     {
         var baseDir = options.OutputDir ?? (options.OutputFile != null
             ? Path.GetDirectoryName(Path.GetFullPath(options.OutputFile))
@@ -245,35 +355,68 @@ try
         await Console.Error.WriteLineAsync(
             $"  total:   {totalSw.Elapsed.TotalMilliseconds,8:F1} ms")
             .ConfigureAwait(true);
-
-        // Memory footprint — useful for verifying streaming actually keeps memory low
-        // even with huge input. Peak working set is the OS-level RSS (process-wide),
-        // total managed allocations is the cumulative GC allocation throughout the run.
-        // For streaming, peak working set should stay roughly flat as input grows;
-        // for tree-based, both grow linearly with input size.
-        try
-        {
-            var proc = System.Diagnostics.Process.GetCurrentProcess();
-            proc.Refresh();
-            var peakBytes = proc.PeakWorkingSet64;
-            var totalAlloc = GC.GetTotalAllocatedBytes(precise: true);
-            await Console.Error.WriteLineAsync(
-                $"  memory:  peak working set {FormatBytes(peakBytes)}, allocated {FormatBytes(totalAlloc)}")
-                .ConfigureAwait(true);
-        }
-        catch { /* memory stats are best-effort */ }
+        // Memory footprint — Martin Honnen specifically wants this for comparing
+        // streamed vs non-streamed transforms. Mirrors xquery4's --timing memory line.
+        var proc = System.Diagnostics.Process.GetCurrentProcess();
+        proc.Refresh();
+        var peakBytes = proc.PeakWorkingSet64;
+        var allocBytes = GC.GetTotalAllocatedBytes(precise: false);
+        await Console.Error.WriteLineAsync(
+            $"  memory:  peak={FormatBytes(peakBytes)}  allocated={FormatBytes(allocBytes)}")
+            .ConfigureAwait(true);
     }
 
     return 0;
 }
-catch (Exception ex) when (ex is PhoenixmlDb.Xslt.Engine.XsltException)
+catch (PhoenixmlDb.Xslt.Engine.XsltException ex)
 {
-    await Console.Error.WriteLineAsync($"XSLT error: {ex.Message}").ConfigureAwait(true);
+    // Compose: "XSLT error at <module>:<line>:<col>: <message>". The module is most useful
+    // when stylesheets are composed of imported/included files — without it, a line number
+    // alone is ambiguous. Strip a "file://" prefix to keep the path readable on the console.
+    var locationInfo = "";
+    if (ex.Location != null)
+    {
+        var loc = ex.Location;
+        var module = loc.Module;
+        if (!string.IsNullOrEmpty(module) && module.StartsWith("file://", StringComparison.Ordinal))
+        {
+            try
+            {
+                module = new Uri(module).LocalPath;
+            }
+            catch (UriFormatException)
+            {
+                // Leave the raw URI in place — better than stripping incorrectly.
+            }
+        }
+        var modulePart = string.IsNullOrEmpty(module) ? "" : $"{module}:";
+        var linePart = loc.Line > 0 ? $"{loc.Line}:{loc.Column}" : "";
+        if (modulePart.Length > 0 || linePart.Length > 0)
+            locationInfo = $" at {modulePart}{linePart}".TrimEnd(':');
+    }
+    await Console.Error.WriteLineAsync($"XSLT error{locationInfo}: {ex.Message}").ConfigureAwait(true);
     return 2;
 }
 catch (PhoenixmlDb.XQuery.Parser.XQueryParseException ex)
 {
     await Console.Error.WriteLineAsync($"XPath parse error: {ex.Message}").ConfigureAwait(true);
+    return 2;
+}
+catch (PhoenixmlDb.XQuery.Execution.XQueryRuntimeException ex)
+{
+    // Runtime XPath/XQuery errors that escape XSLT-instruction handlers come through here —
+    // surface them as clean "XQuery error: <code>: <message>" so users don't see a raw
+    // .NET stack trace for a spec-defined error like XPDY0050 / XPTY0019.
+    await Console.Error.WriteLineAsync($"XQuery error: {ex.ErrorCode}: {ex.Message}").ConfigureAwait(true);
+    if (options.Verbose && ex.StackTrace != null)
+        await Console.Error.WriteLineAsync(ex.StackTrace).ConfigureAwait(true);
+    return 2;
+}
+catch (PhoenixmlDb.XQuery.Functions.XQueryException ex)
+{
+    await Console.Error.WriteLineAsync($"XQuery error: {ex.ErrorCode}: {ex.Message}").ConfigureAwait(true);
+    if (options.Verbose && ex.StackTrace != null)
+        await Console.Error.WriteLineAsync(ex.StackTrace).ConfigureAwait(true);
     return 2;
 }
 catch (Exception ex)
@@ -289,14 +432,13 @@ catch (Exception ex)
 
 static string FormatBytes(long bytes)
 {
-    const double KiB = 1024d, MiB = KiB * 1024, GiB = MiB * 1024;
-    return bytes switch
-    {
-        >= (long)GiB => $"{bytes / GiB:F2} GiB",
-        >= (long)MiB => $"{bytes / MiB:F2} MiB",
-        >= (long)KiB => $"{bytes / KiB:F2} KiB",
-        _ => $"{bytes} B"
-    };
+    const double KiB = 1024d;
+    const double MiB = KiB * 1024d;
+    const double GiB = MiB * 1024d;
+    if (bytes >= GiB) return $"{bytes / GiB:F2} GiB";
+    if (bytes >= MiB) return $"{bytes / MiB:F2} MiB";
+    if (bytes >= KiB) return $"{bytes / KiB:F2} KiB";
+    return $"{bytes} B";
 }
 
 static (string Name, string? Namespace) ResolveCliQName(string qname)
@@ -340,11 +482,15 @@ static void PrintUsage()
                              Start with a named template instead of matching
           -im, --initial-mode <name>
                              Set the initial mode for template matching
-          --timing           Show parse/compile/transform timing + memory footprint
-                             (peak working set + total managed allocations)
+          --timing           Show parse/compile/transform timing breakdown
           --trace            Log template matching, function calls, built-in rules
           --dry-run          Parse and compile only, do not execute
-          --stream           Use streaming for large files (lower memory usage)
+          --stream           Force streaming for the source. Auto-selected for file
+                             inputs when the stylesheet declares a streamable mode;
+                             use this flag to force streaming on other stylesheets
+                             (with the existing fallback if the body isn't streamable).
+          --no-stream        Disable auto-streaming. Forces the in-memory tree path
+                             even when the stylesheet declares a streamable mode.
           -v, --verbose      Show detailed error information
           -h, --help         Show this help message
           --version          Show version information
@@ -386,6 +532,9 @@ file sealed class CliOptions
     public bool Trace { get; init; }
     public bool DryRun { get; init; }
     public bool Stream { get; init; }
+    /// <summary>True if the user passed <c>--no-stream</c> to opt out of
+    /// auto-streaming on a streamable stylesheet.</summary>
+    public bool NoStream { get; init; }
     public bool ShowHelp { get; init; }
     public bool ShowVersion { get; init; }
     public bool Verbose { get; init; }
@@ -403,6 +552,7 @@ file sealed class CliOptions
         var trace = false;
         var dryRun = false;
         var stream = false;
+        var noStream = false;
         var showHelp = false;
         var showVersion = false;
         var verbose = false;
@@ -465,6 +615,9 @@ file sealed class CliOptions
                 case "--stream":
                     stream = true;
                     break;
+                case "--no-stream":
+                    noStream = true;
+                    break;
                 case "-v" or "--verbose":
                     verbose = true;
                     break;
@@ -501,6 +654,7 @@ file sealed class CliOptions
             Trace = trace,
             DryRun = dryRun,
             Stream = stream,
+            NoStream = noStream,
             ShowHelp = showHelp,
             ShowVersion = showVersion,
             Verbose = verbose
