@@ -2,6 +2,12 @@
 
 Both `PhoenixmlDb.Xslt.Cli` (the `xslt` global tool) and `PhoenixmlDb.XQuery.Cli` (the `xquery` global tool) ship from this repo with a single shared version.
 
+## Unreleased
+
+### Fix: `xquery` CLI attribute-value whitespace escaping
+
+The `xquery` CLI's result serializer escaped attribute values with its own copy of the escaping rules, which left tab/newline/carriage-return literal — XML attribute-value normalization then collapsed them to spaces on re-read. It now routes attribute escaping through the shared `PhoenixmlDb.Xdm.Serialization.CharacterEscaper`, emitting `&#x9;`/`&#xA;`/`&#xD;`, so the CLI's output matches the engine library exactly. Requires PhoenixmlDb.Core 1.1.9 and PhoenixmlDb.XQuery 1.4.5.
+
 ## 1.4.8 (2026-06-14)
 
 Aligns the CLIs to the current engine generation: PhoenixmlDb.Xslt 1.4.8, PhoenixmlDb.XQuery 1.4.4, PhoenixmlDb.Core 1.1.8.
