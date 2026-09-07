@@ -25,7 +25,26 @@ pack predated the XQuery release, and it was noticed only because those lines we
 Wiring these up immediately showed this repo's build carrying Xslt 1.6.13 / XQuery 1.6.12 while
 calling itself 1.6.14.
 
-### Known: two packages install a command called `xslt`
+### The two tools were forks, and the fork was missing fixes
+
+Worse than the stale pins above, and not fixable by bumping anything. These programs were copies
+of the ones in the engine repos, and they had drifted in source:
+
+| | `xslt` (engine repo) | `PhoenixmlDb.Xslt.Cli` (here) |
+|---|---|---|
+| `-it` with redirected stdin | returns | **hung forever** (BUGS.md #18 guard absent) |
+| reading sources | `XmlSourceReader` | `File.ReadAllTextAsync` |
+| `fn:current-output-uri()` support | yes | no |
+| XDM arrays in adaptive output | serialised | unhandled |
+
+Two packages install a command called `xslt`, and one of them hung where the other did not. A
+version number said nothing about it, because the difference was in the fork's own code.
+
+All four shared files are now byte-identical to the engine repos, and
+`scripts/check-cli-source.sh` fails the build if they drift again — it fetches the canonical file
+and diffs it. Fix once, reaches both channels.
+
+### Still open: two packages install a command called `xslt`
 
 `PhoenixmlDb.Xslt.Cli` (this repo) and `xslt` (published from `phoenixmldb-xslt`) both register
 `xslt` as their tool command, and they have been on different engine generations. Which engine a

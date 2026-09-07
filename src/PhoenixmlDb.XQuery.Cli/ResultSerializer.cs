@@ -77,15 +77,19 @@ internal sealed class ResultSerializer
                     SerializeMapAdaptive(map);
                 break;
 
-            case object?[] array:
+            // A SEQUENCE, despite what the JSON helper below is called. It was bound to a
+            // variable named `array` here, which is how the adaptive-array bug got written:
+            // the name asserted the wrong shape and the code followed the name. See XdmShape
+            // for the convention — object?[] is a sequence, List<object?> is an array.
+            case object?[] sequence:
                 if (_method == OutputMethod.Json)
                 {
-                    SerializeArrayAsJson(array);
+                    SerializeArrayAsJson(sequence);
                 }
                 else
                 {
                     var first = true;
-                    foreach (var element in array)
+                    foreach (var element in sequence)
                     {
                         if (!first && _method == OutputMethod.Text)
                             _output.Write(' ');
@@ -97,6 +101,25 @@ internal sealed class ResultSerializer
 
             case IList<object?> typedList when _method == OutputMethod.Json:
                 SerializeListAsJson(typedList);
+                break;
+
+            // An ARRAY is List<object?>; a SEQUENCE is object?[]. (The `case object?[]` above
+            // is the sequence case, despite its variable name.) Adaptive output is the only
+            // method that gives an array a lexical wrapper, and without this case an array
+            // fell through to `IEnumerable<object?>` below and serialized as its bare members:
+            // Martin Honnen's partition() example printed 1234567 where Saxon prints [1,\n 2]
+            // and so on. This mirrors XQueryResultSerializer.SerializeArrayAdaptive, which had
+            // been right all along — the CLI simply carries its own serializer.
+            case List<object?> adaptiveArray when _method == OutputMethod.Adaptive:
+                _output.Write('[');
+                var firstArrayMember = true;
+                foreach (var member in adaptiveArray)
+                {
+                    if (!firstArrayMember) _output.Write(',');
+                    SerializeItemAdaptive(member);
+                    firstArrayMember = false;
+                }
+                _output.Write(']');
                 break;
 
             case IEnumerable<object?> sequence:
@@ -171,14 +194,29 @@ internal sealed class ResultSerializer
             case IDictionary<object, object?> map:
                 SerializeMapAdaptive(map);
                 break;
-            case object?[] arr:
+            // Same distinction as above, and it was inverted here too: this branch matched
+            // object?[] — a SEQUENCE — and gave it array brackets. A nested sequence takes
+            // PARENTHESES, and a length-1 sequence is indistinguishable from its single item.
+            case List<object?> arr:
                 _output.Write('[');
-                for (var i = 0; i < arr.Length; i++)
+                for (var i = 0; i < arr.Count; i++)
                 {
                     if (i > 0) _output.Write(',');
                     SerializeItemAdaptive(arr[i]);
                 }
                 _output.Write(']');
+                break;
+            case object?[] seq when seq.Length == 1:
+                SerializeItemAdaptive(seq[0]);
+                break;
+            case object?[] seq:
+                _output.Write('(');
+                for (var i = 0; i < seq.Length; i++)
+                {
+                    if (i > 0) _output.Write(',');
+                    SerializeItemAdaptive(seq[i]);
+                }
+                _output.Write(')');
                 break;
             case XdmNode node:
                 SerializeXmlNode(node);

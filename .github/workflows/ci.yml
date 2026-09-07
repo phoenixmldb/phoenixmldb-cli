@@ -35,6 +35,9 @@ jobs:
           VERSION="1.0.${COMMIT_COUNT}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
+      - name: CLI source matches the engine repos
+        run: ./scripts/check-cli-source.sh
+
       - name: Engine pins are not stale
         run: ./scripts/check-pins.sh
 

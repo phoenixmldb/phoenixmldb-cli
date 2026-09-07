@@ -8,11 +8,13 @@ if (options.ShowVersion)
 {
     var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
     Console.WriteLine($"xslt {version} (PhoenixmlDb XSLT 3.0/4.0)");
-    // Report the BUNDLED engines, not just this package's version. A version identifies the
-    // package, not what it carries — and the two have drifted repeatedly. Most recently the
-    // `xslt` tool shipped 1.6.13 while embedding PhoenixmlDb.XQuery 1.6.12, because the XSLT
-    // pack predated the XQuery release; Martin Honnen spotted it only because that tool prints
-    // these lines. This one did not, so the same drift here would have been invisible.
+
+    // Report the BUNDLED engines. The xquery tool had the mirror-image of this problem: it read
+    // 1.6.9 while embedding PhoenixmlDb.Xslt 1.6.6, so four releases of fixes were unreachable
+    // and nothing on screen said so — Martin Honnen had to infer it from a repro that kept
+    // failing against a version that supposedly contained the fix. A version identifies the
+    // package, not what it carries. This tool embeds PhoenixmlDb.XQuery and can drift the same
+    // way, so it prints both.
     foreach (var (label, asm) in new[]
              {
                  ("PhoenixmlDb.Xslt", typeof(PhoenixmlDb.Xslt.XsltTransformer).Assembly),
@@ -26,8 +28,7 @@ if (options.ShowVersion)
                 ?? asm.GetName().Version?.ToString(3)
                 ?? "unknown";
         var plus = v.IndexOf('+', StringComparison.Ordinal);
-        if (plus >= 0) v = v[..plus];
-        Console.WriteLine($"  {label} {v}");
+        Console.WriteLine($"  {label} {(plus >= 0 ? v[..plus] : v)}");
     }
     return 0;
 }
@@ -81,7 +82,7 @@ try
             await Console.Error.WriteLineAsync($"Error: Stylesheet not found: {options.Stylesheet}").ConfigureAwait(true);
             return 1;
         }
-        stylesheetXml = await File.ReadAllTextAsync(stylesheetPath).ConfigureAwait(true);
+        stylesheetXml = await PhoenixmlDb.Xslt.XmlSourceReader.ReadAsync(stylesheetPath).ConfigureAwait(true);
         stylesheetUri = new Uri(stylesheetPath);
     }
     readSw.Stop();
@@ -98,6 +99,13 @@ try
         foreach (var (name, value) in options.Parameters)
             staticParams[name] = value;
     }
+    // Tell the engine where the principal result is going, so fn:current-output-uri() has an
+    // answer and relative xsl:result-document/@href resolves against it (XSLT 3.0 §2.3). Without
+    // -o the result goes to stdout, which has no URI — current-output-uri() then correctly
+    // reports the empty sequence. Reported by Martin Honnen 2026-09-06.
+    if (options.OutputFile != null)
+        transformer.SetBaseOutputUri(new Uri(Path.GetFullPath(options.OutputFile)));
+
     await transformer.LoadStylesheetAsync(stylesheetXml, stylesheetUri, staticParams).ConfigureAwait(true);
     compileSw.Stop();
 
@@ -290,7 +298,7 @@ try
         }
         else if (sourcePath != null)
         {
-            inputXml = await File.ReadAllTextAsync(sourcePath).ConfigureAwait(true);
+            inputXml = await PhoenixmlDb.Xslt.XmlSourceReader.ReadAsync(sourcePath).ConfigureAwait(true);
             sourceSw.Stop();
 
             if (options.Timing)
@@ -302,9 +310,27 @@ try
         }
         // else: HTTP source already loaded into inputXml above
     }
-    else if (Console.IsInputRedirected)
+    // CA1508 claims `options.InitialTemplate == null` is always true here. It is not: the
+    // property is read at the top of this method to call SetInitialTemplate, and no branch
+    // between there and here returns on it. Verified empirically — with the condition in
+    // place both repros in /repos/phoenixml/hang-repro complete in under a second; without
+    // it they hang indefinitely. Suppressed rather than removed, because removing it
+    // reintroduces BUGS.md #18.
+#pragma warning disable CA1508
+    else if (Console.IsInputRedirected && options.InitialTemplate == null)
+#pragma warning restore CA1508
     {
-        // Read XML from stdin
+        // Read XML from stdin — but only when a source document is actually wanted.
+        //
+        // `Console.IsInputRedirected` is true for ANY non-terminal stdin, including a pipe
+        // inherited from a parent that never writes and never closes: a CI job, a script, an
+        // agent harness. Reading it there blocks forever with no output and no error. Two
+        // invocations were found alive at 0% CPU for 21 hours and 3 days 19 hours respectively
+        // (BUGS.md #18); a managed stack showed both parked in ConsoleStream.Read.
+        //
+        // When -it names a template the transform starts from that template and needs no
+        // source, so there is nothing to wait for. Piping input to an -it invocation is not
+        // meaningful, which is why this is a guard rather than a race.
         using var reader = new StreamReader(Console.OpenStandardInput());
         inputXml = await reader.ReadToEndAsync().ConfigureAwait(true);
         if (string.IsNullOrWhiteSpace(inputXml))
@@ -440,15 +466,28 @@ catch (PhoenixmlDb.XQuery.Functions.XQueryException ex)
         await Console.Error.WriteLineAsync(ex.StackTrace).ConfigureAwait(true);
     return 2;
 }
+// CA1031: a command-line tool's top-level handler is exactly where catching everything is
+// correct. The alternative the rule suggests — rethrow — is what produced "Unhandled
+// exception" plus a stack dump on top of an already-reported error. Reporting and returning a
+// non-zero exit code IS the handling.
+#pragma warning disable CA1031
 catch (Exception ex)
+#pragma warning restore CA1031
 {
+    // Report and EXIT — do not rethrow. Every other handler here returns 2; this one printed
+    // a clean "Error: …" line and then rethrew, so .NET added "Unhandled exception" plus a
+    // full stack trace on top of it. Martin Honnen's XTDE0555 report is a transcript of
+    // exactly that: the tool said the right thing and then crash-dumped over it.
+    //
+    // The XQueryRuntimeException handler above states the intent — "so users don't see a raw
+    // .NET stack trace for a spec-defined error" — and the catch-all was undoing it for every
+    // error that did not happen to be one of the three typed cases.
     await Console.Error.WriteLineAsync($"Error: {ex.Message}").ConfigureAwait(true);
     if (options.Verbose)
-    {
         await Console.Error.WriteLineAsync(ex.StackTrace).ConfigureAwait(true);
-    }
-
-    throw;
+    else
+        await Console.Error.WriteLineAsync("(run with --verbose for the stack trace)").ConfigureAwait(true);
+    return 2;
 }
 
 static string FormatBytes(long bytes)
