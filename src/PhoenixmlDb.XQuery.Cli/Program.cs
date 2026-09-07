@@ -20,6 +20,27 @@ if (options.ShowVersion)
 {
     var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
     Console.WriteLine($"xquery {version} (PhoenixmlDb XQuery/XPath 4.0)");
+    // Report the BUNDLED engines, not just this package's version. A version identifies the
+    // package, not what it carries — and the two have drifted repeatedly. Most recently the
+    // `xslt` tool shipped 1.6.13 while embedding PhoenixmlDb.XQuery 1.6.12, because the XSLT
+    // pack predated the XQuery release; Martin Honnen spotted it only because that tool prints
+    // these lines. This one did not, so the same drift here would have been invisible.
+    foreach (var (label, asm) in new[]
+             {
+                 ("PhoenixmlDb.XQuery", typeof(PhoenixmlDb.XQuery.XQueryFacade).Assembly),
+                 ("PhoenixmlDb.Core", typeof(PhoenixmlDb.Core.QName).Assembly),
+             })
+    {
+        var v = asm.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                   .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+                   .FirstOrDefault()?.InformationalVersion
+                ?? asm.GetName().Version?.ToString(3)
+                ?? "unknown";
+        var plus = v.IndexOf('+', StringComparison.Ordinal);
+        if (plus >= 0) v = v[..plus];
+        Console.WriteLine($"  {label} {v}");
+    }
+
     return 0;
 }
 

@@ -2,6 +2,40 @@
 
 Both `PhoenixmlDb.Xslt.Cli` (the `xslt` global tool) and `PhoenixmlDb.XQuery.Cli` (the `xquery` global tool) ship from this repo with a single shared version.
 
+## 1.6.14 (2026-09-06)
+
+Both tools jump from the 1.4 engine generation to 1.6, skipping nine minor versions of engine
+fixes. The pins had drifted a long way: Core 1.1.9, XQuery 1.4.6, Xslt 1.4.10, against 1.6.7 /
+1.6.14 / 1.6.14 current. Anyone installing `PhoenixmlDb.Xslt.Cli` was getting an engine from
+June. The version number is aligned to the engines it carries so the gap is visible at a glance.
+
+### Both tools now print the engines they bundle
+
+```
+xslt 1.6.14 (PhoenixmlDb XSLT 3.0/4.0)
+  PhoenixmlDb.Xslt 1.6.14
+  PhoenixmlDb.XQuery 1.6.14
+  PhoenixmlDb.Core 1.6.7
+```
+
+A version identifies the package, not what it carries, and the two drift. The `xslt` tool
+published from the engine repo has printed these lines for a while; these two did not. That is not
+hypothetical — `xslt` 1.6.13 shipped embedding PhoenixmlDb.XQuery **1.6.12**, because the XSLT
+pack predated the XQuery release, and it was noticed only because those lines were on screen.
+Wiring these up immediately showed this repo's build carrying Xslt 1.6.13 / XQuery 1.6.12 while
+calling itself 1.6.14.
+
+### Known: two packages install a command called `xslt`
+
+`PhoenixmlDb.Xslt.Cli` (this repo) and `xslt` (published from `phoenixmldb-xslt`) both register
+`xslt` as their tool command, and they have been on different engine generations. Which engine a
+user gets depends on which package they installed, and until this release the only way to tell
+them apart was the version banner — which one of them did not print.
+
+This release makes both tools honest about what they carry. It does not resolve the duplication,
+which is a packaging decision: either retire these two in favour of `xslt`/`xquery4`, or keep them
+and accept that both must be released together.
+
 ## 1.4.10 (2026-06-17)
 
 Aligns both CLIs to the current engine generation: PhoenixmlDb.Core 1.1.9, PhoenixmlDb.XQuery 1.4.6, PhoenixmlDb.Xslt 1.4.10. Picks up the engine fixes (Martin Honnen): streaming `xsl:template match="/"` now fires under `streamable="yes"`, and base URI is preserved across temporary-tree copy boundaries / `fn:transform` results (DocBook xslTNG `FORG0002`).
