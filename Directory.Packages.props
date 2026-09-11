@@ -9,7 +9,7 @@
          published Xslt 1.6.13 carries XQuery 1.6.12 because the tag was cut before the
          XQuery push; an equality check at pack time is the only thing that catches that. -->
     <PackageVersion Include="PhoenixmlDb.XQuery" Version="1.6.14" />
-    <PackageVersion Include="PhoenixmlDb.Xslt" Version="1.6.14" />
+    <PackageVersion Include="PhoenixmlDb.Xslt" Version="1.6.15" />
     <!-- Storage -->
     <PackageVersion Include="LightningDB" Version="0.16.0" />
     <!-- gRPC / Protobuf -->
