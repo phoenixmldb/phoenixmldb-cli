@@ -85,11 +85,12 @@ jobs:
           path: ./artifacts/*.nupkg
 
   publish:
-    # Gated on tests as well as build. A tag must not reach nuget.org with a red suite:
-    # once a package is public the only remedies are unlist or a follow-up version, and both
-    # cost consumers more than a blocked tag costs us. Restored 2026-09-10 after a review of
-    # release discipline found every package in this org could publish with tests failing.
-    needs: [build, test]
+    # `needs: build` only, because THIS REPO RUNS NO TESTS IN CI — there is no `dotnet test`
+    # anywhere in this workflow, so there is nothing to gate on. That is the actual gap here,
+    # and it is worse than an ungated publish: an ungated publish at least has a red signal
+    # somewhere to ignore. Gating on a `test` job that does not exist would only break the
+    # workflow file, which is what a first pass at this did. Adding real CLI tests is the fix.
+    needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
